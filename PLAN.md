@@ -254,3 +254,38 @@ commands), `results/*.csv`, figures, `results/test_log.jsonl`, passing tests.
      5. Check that the seven existing hedgers reproduce run 2 up to floating-point noise.
    - **Reporting.** The four new rows are reported next to the old ones whatever the result. The idea comes from
      reading run 2's diagnosis, so read run 3's new rows as a post-hoc follow-up, not as a clean first test.
+16. **Run 3 done, 2026-11-22.**
+   - **Validation**, which took 2 h 52 min on 2 CPU threads, chose per world:
+     - bootstrap: `fwd_noisy`, c = 0.3, alpha = 0.9 (validation CVaR95 6.16);
+     - GARCH-t: `trailing`, c = 0.1, alpha = 0.9 (5.55);
+     - rough vol: `trailing`, c = 0.1, alpha = 0.9 (5.98);
+     - diffusion: `fwd_noisy`, c = 0.1, alpha = 0.99 (6.72).
+     BS delta at the entry IV scores 6.63 on the same options. Every cell is in `results/validation/dh_resid_<world>.csv`.
+   - **Freeze and final training.** The config was frozen at 13:51 UTC with hash `d35f2054d7c27041`. The four final
+     residual policies were then trained on the cached final-stage paths, in about 5 min each.
+   - **Archive.** Run 2's test outputs and frozen config were moved to `results/run2_official/`. Its simulator and
+     realism files and its selected hyperparameters were copied there. Byte-identical copies of the four original
+     policies went to `models/run2_official/`; the originals stay in `models/final/` because run 3 uses them.
+   - **Test run 3** ran with `--force` and was logged at 14:15 UTC as `forced_rerun: true`, with the frozen hash. The
+     test stage now refuses to run if the hash differs from `frozen_config.json`.
+   - **Result: no residual hedger beats BS delta.** CVaR95 loss vs BS delta's 3.64, with the change and its 95%
+     interval:
+     - rough vol: 3.63, +0.00 [-0.45, +0.53];
+     - GARCH-t: 3.69, -0.05 [-0.51, +0.48];
+     - diffusion: 3.93, -0.29 [-0.72, +0.20];
+     - bootstrap: 3.97, -0.33 [-0.82, +0.18].
+   - **Beyond the headline.**
+     - All four residual hedgers have a significantly higher standard deviation of loss than BS delta (+0.23 to +0.32).
+     - Their correction at entry on test options averages 0.06-0.09 BTC and often sits at the bound.
+     - They narrow the gap of the original deep hedgers (for example diffusion, from -1.90 to -0.29), but no edge
+       appears.
+   - **Reproduction.** The seven original hedgers were not retrained.
+     - The three benchmarks reproduce run 2 bit for bit.
+     - The four original deep hedgers differ by at most 1.7e-10 (% of S0) in any summary statistic, 6.8e-10 in the
+       split and fee tables, and 7.2e-7 in any single option's P&L. This is float32 rounding under a different
+       thread count (`results/reproduction_vs_run2.csv`).
+   - **Edits after the test.**
+     - `report.py` got shorter titles for the hedge-ratio figure (one was clipped). It is text only, so the code hash
+       is now `288cd6ea965c52a0`, against `6ebba392e2e4b00e` logged by the test.
+     - The README's run-2 value 3.69 for BS-DVOL in 2022-23 was a rounding slip (3.685); it now reads 3.68.
+   - **Tests.** 30 tests: 21 old and 9 in `tests/test_residual.py`.
