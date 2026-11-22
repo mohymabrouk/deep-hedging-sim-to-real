@@ -216,3 +216,41 @@ commands), `results/*.csv`, figures, `results/test_log.jsonl`, passing tests.
    Also fixed:
    - `report.py` read the *first* test-log entry for the header of `tables.md`; it now reads the latest.
    - Added the regression test `tests/test_sims.py`. It fails on the uncapped sampler.
+15. **Residual deep hedgers, pre-declared on 2026-11-22 before any validation run of this change.**
+   - **Why.** Run 2 showed that no deep hedger beats BS delta at the entry IV. BS delta sees the market's
+     forward-looking implied vol; the policies see only a 10-day realised vol, learned in worlds that are 60-70% more
+     volatile than 2022-2026.
+   - **New hedgers.** One residual hedger per world, `dh_resid_<world>`. The seven existing hedgers stay unchanged and
+     are not retrained.
+   - **Policy.** q_t = BS delta(S_t, K, tau_t, sigma_entry) + c * tanh(MLP(x_t)), clipped to [0, 1] for calls and
+     [-1, 0] for puts. The MLP has the same shape as before (3 x 64, SiLU). It has 8 inputs: the six existing features,
+     sigma_entry, and the base BS delta. Its last layer starts at zero, so at initialisation the policy is exactly
+     "BS delta, entry IV".
+   - **sigma_entry on real options.** The IV of the entry trade, already in the option table. It is known at entry,
+     before the first hedge at 08:00.
+   - **sigma_entry on simulated paths.** The worlds have no IV, so two stand-ins are declared here and chosen per world
+     on validation:
+     - `fwd_noisy`: the path's realised vol over the option's life (entry to expiry) times exp(eta * eps - eta^2/2),
+       with eps ~ N(0, 1) per contract and eta = 0.3. It mimics an IV as a noisy forecast of the vol the option will
+       see. eta = 0.3 is a round number; it is not tuned and not measured on option data.
+     - `trailing`: the realised vol of the 20 daily returns before entry.
+   - **Grid.** Correction bound c in {0.1, 0.3}. CVaR level alpha in {0.5, 0.9, 0.99}, the same grid as before.
+   - **Training.** The same budget as the existing policies: the cached 20,000 paths per world, batch 4,096,
+     1,500 Adam steps, lr 2e-3 with cosine decay, 0.05% perp cost. Every cell of a world uses the same seed, so the
+     cells see the same paths and contracts. The stand-in noise has its own random stream.
+   - **Selection, on validation only.** It uses the 2021 options and the cached validation paths (simulators fitted on
+     data <= 2020), and it runs in two stages:
+     1. Train every stand-in x c at alpha = 0.9 (4 cells per world).
+     2. Train the stage-1 winner at alpha = 0.5 and 0.99.
+     The chosen cell is the one with the lowest validation CVaR95 loss at 1x fees, the same rule as for alpha before.
+     That is 24 policies. A full 12-cell grid per world (48 policies, about 3 hours on 2 CPU threads) was judged too
+     slow for a shared machine.
+   - **Then.**
+     1. Freeze a new config hash.
+     2. Retrain the four chosen policies on the final-stage paths. These are the cached paths of run 2 (simulators
+        fitted on data <= 2021), not refitted.
+     3. Archive run 2 in `results/run2_official/` and `models/run2_official/`.
+     4. Run the test with `--force` (test run 3, logged as a forced rerun) for all 11 hedgers.
+     5. Check that the seven existing hedgers reproduce run 2 up to floating-point noise.
+   - **Reporting.** The four new rows are reported next to the old ones whatever the result. The idea comes from
+     reading run 2's diagnosis, so read run 3's new rows as a post-hoc follow-up, not as a clean first test.
