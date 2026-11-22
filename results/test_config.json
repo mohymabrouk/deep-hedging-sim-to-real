@@ -70,6 +70,17 @@
   "rough",
   "diffusion"
  ],
+ "RESID_STAND_INS": [
+  "fwd_noisy",
+  "trailing"
+ ],
+ "RESID_IV_NOISE": 0.3,
+ "RESID_TRAIL_WINDOW": 20,
+ "RESID_BOUNDS": [
+  0.1,
+  0.3
+ ],
+ "RESID_STAGE1_ALPHA": 0.9,
  "HEDGERS": [
   "no_hedge",
   "bs_iv",
@@ -77,12 +88,38 @@
   "dh_bootstrap",
   "dh_garch",
   "dh_rough",
-  "dh_diffusion"
+  "dh_diffusion",
+  "dh_resid_bootstrap",
+  "dh_resid_garch",
+  "dh_resid_rough",
+  "dh_resid_diffusion"
  ],
  "selected_alpha": {
   "bootstrap": 0.99,
   "garch": 0.9,
   "rough": 0.9,
   "diffusion": 0.99
+ },
+ "selected_residual": {
+  "bootstrap": {
+   "stand_in": "fwd_noisy",
+   "bound": 0.3,
+   "alpha": 0.9
+  },
+  "garch": {
+   "stand_in": "trailing",
+   "bound": 0.1,
+   "alpha": 0.9
+  },
+  "rough": {
+   "stand_in": "trailing",
+   "bound": 0.1,
+   "alpha": 0.9
+  },
+  "diffusion": {
+   "stand_in": "fwd_noisy",
+   "bound": 0.1,
+   "alpha": 0.99
+  }
  }
 }
