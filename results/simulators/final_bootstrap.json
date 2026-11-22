@@ -1,0 +1,12 @@
+{
+ "generator": "bootstrap",
+ "stage": "final",
+ "fit_end": "2021-12-31",
+ "train_first_day": "2018-01-02",
+ "train_last_day": "2021-12-31",
+ "n_train_days": 1448,
+ "martingale_shift_per_day": 0.0018000904113484426,
+ "fit_and_sample_seconds": 0,
+ "mean_block_days": 20,
+ "n_returns": 1448
+}
