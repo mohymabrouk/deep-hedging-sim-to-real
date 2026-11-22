@@ -1,7 +1,8 @@
 """Command line: python -m dh.cli <stage>.
 
-Stages, in order: download, build, validate, final, test, report. Each writes its outputs to files, so a
-stage can be rerun alone. `test` runs once: it refuses to run again unless --force (which is logged).
+Stages, in order: download, build, validate, [validate_resid], freeze, final, [final_resid], test, report. Each
+writes its outputs to files, so a stage can be rerun alone. `test` runs once: it refuses to run again unless --force
+(which is logged). validate_resid / final_resid are the residual hedgers added for test run 3.
 """
 
 import argparse
@@ -19,9 +20,10 @@ def setup_logging(stage: str) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="dh")
-    p.add_argument("stage", choices=["download", "build", "validate", "freeze", "final", "test", "report"])
+    p.add_argument("stage", choices=["download", "build", "validate", "validate_resid", "freeze", "final", "final_resid",
+                                     "test", "report"])
     p.add_argument("--force", action="store_true", help="test stage: allow a second (logged) test run")
-    p.add_argument("--only", default=None, help="validate/final: comma-separated generators to (re)train")
+    p.add_argument("--only", default=None, help="validate/final(_resid): comma-separated generators to (re)train")
     a = p.parse_args(argv)
     setup_logging(a.stage)
     if a.stage == "download":
@@ -33,6 +35,12 @@ def main(argv=None) -> None:
     elif a.stage == "validate":
         from dh import pipeline
         pipeline.validate(only=a.only.split(",") if a.only else None)
+    elif a.stage == "validate_resid":
+        from dh import pipeline
+        pipeline.validate_resid(only=a.only.split(",") if a.only else None)
+    elif a.stage == "final_resid":
+        from dh import pipeline
+        pipeline.final_resid(only=a.only.split(",") if a.only else None)
     elif a.stage == "freeze":
         from dh import pipeline
         pipeline.freeze()

@@ -1,5 +1,6 @@
 """Protocol stages: validate (fit <= 2020, choose alpha on 2021 options), final (refit <= 2021, retrain),
-test (score 2022 -> latest once, logged)."""
+test (score 2022 -> latest once, logged). The residual hedgers (added for test run 3) have their own
+validate_resid and final_resid stages; freeze and test cover both families."""
 
 import hashlib
 import json
@@ -13,7 +14,7 @@ import torch
 
 from dh import config, dataset, evaluate, market
 from dh.diffusion import Diffusion, make_windows
-from dh.hedging import BSDelta, DeepHedger, NoHedge, returns_to_prices, train_policy
+from dh.hedging import BSDelta, DeepHedger, NoHedge, ResidualHedger, returns_to_prices, train_policy
 from dh.sims import Bootstrap, Garch, RoughVol, martingale, realism_stats
 
 log = logging.getLogger(__name__)
@@ -122,24 +123,50 @@ def _alpha_for(name: str, wait: bool = False) -> float:
     return float(v.loc[v["cvar95_loss"].idxmin(), "alpha"])
 
 
+def _resid_choice(name: str) -> dict:
+    """Residual hedger of world `name`: the (stand-in, bound, alpha) cell with the lowest validation CVaR95 loss."""
+    v = pd.read_csv(config.RESULTS / "validation" / f"dh_resid_{name}.csv")
+    best = v.loc[v["cvar95_loss"].idxmin()]
+    return {"stand_in": str(best["stand_in"]), "bound": float(best["bound"]), "alpha": float(best["alpha"])}
+
+
+def selected_residual() -> dict[str, dict]:
+    return {name: _resid_choice(name) for name in config.GENERATORS
+            if (config.RESULTS / "validation" / f"dh_resid_{name}.csv").exists()}
+
+
 def selected_alphas() -> dict[str, float]:
     out = {name: _alpha_for(name) for name in config.GENERATORS}
-    _json(config.RESULTS / "selected_hyperparameters.json", {"criterion": "lowest validation CVaR95 loss (1x fees)", "alpha": out})
+    _json(config.RESULTS / "selected_hyperparameters.json",
+          {"criterion": "lowest validation CVaR95 loss (1x fees)", "alpha": out, "residual": selected_residual()})
     return out
 
 
+def _frozen_cfg() -> tuple[dict, str]:
+    """Every constant + the choices made on validation, and its hash (computed the same way in freeze and test)."""
+    cfg = {**config.as_dict(), "selected_alpha": selected_alphas(), "selected_residual": selected_residual()}
+    return cfg, hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
 def freeze() -> dict:
-    """Frozen config: every constant + the CVaR level chosen per world on validation (results/frozen_config.json)."""
-    alphas = selected_alphas()
+    """Frozen config: every constant + the choices made per world on validation (results/frozen_config.json)."""
+    cfg, cfg_hash = _frozen_cfg()
+    missing = [g for g in config.GENERATORS if g not in cfg["selected_residual"]]
+    if missing:
+        raise SystemExit(f"residual validation missing for {missing}: run validate_resid first")
     val = {g: pd.read_csv(config.RESULTS / "validation" / f"dh_{g}.csv")[["alpha", "mean_pnl", "std_loss", "cvar95_loss"]].to_dict("records")
            for g in config.GENERATORS}
-    cfg = {**config.as_dict(), "selected_alpha": alphas}
+    val_resid = {g: pd.read_csv(config.RESULTS / "validation" / f"dh_resid_{g}.csv")[
+        ["stage", "stand_in", "bound", "alpha", "mean_pnl", "std_loss", "cvar95_loss"]].to_dict("records") for g in config.GENERATORS}
     frozen = {"frozen_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "rule": "per world, the CVaR level alpha with the lowest CVaR95 loss on the 2021 validation options (1x fees)",
-              "config_hash": hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:16],
-              "selected_alpha": alphas, "validation_scores": val, "config": cfg}
+              "rule_residual": "per world, the (sigma_entry stand-in, bound c, alpha) with the lowest CVaR95 loss on the 2021 "
+                               "validation options (1x fees); stage 1: every stand-in x bound at alpha = RESID_STAGE1_ALPHA, "
+                               "stage 2: the stage-1 winner at the other ALPHAS",
+              "config_hash": cfg_hash, "selected_alpha": cfg["selected_alpha"], "selected_residual": cfg["selected_residual"],
+              "validation_scores": val, "validation_scores_residual": val_resid, "config": cfg}
     _json(config.RESULTS / "frozen_config.json", frozen)
-    log.info("frozen config %s: %s", frozen["config_hash"], alphas)
+    log.info("frozen config %s: %s, residual %s", cfg_hash, cfg["selected_alpha"], cfg["selected_residual"])
     return frozen
 
 
@@ -158,6 +185,84 @@ def final(only: list[str] | None = None) -> None:
         log.info("final policy %s alpha=%.2f trained in %.0fs", name, alpha, time.time() - t0)
     if all((config.RESULTS / "validation" / f"dh_{g}.csv").exists() for g in config.GENERATORS):
         selected_alphas()
+
+
+# ---------------------------------------------------------------------------------------------------
+# residual hedgers (test run 3)
+# ---------------------------------------------------------------------------------------------------
+def _resid_seed(name: str) -> int:
+    """One seed per world for every residual cell: the cells differ only by their settings (common random numbers)."""
+    return _policy_seed(f"resid_{name}", 0.0)
+
+
+def _train_resid(name: str, P_all, stand_in: str, bound: float, alpha: float):
+    t0 = time.time()
+    pol, hist = train_policy(P_all, alpha, seed=_resid_seed(name), residual_bound=bound, stand_in=stand_in)
+    return pol, hist, round(time.time() - t0)
+
+
+def validate_resid(only: list[str] | None = None) -> None:
+    """Residual hedgers on the 2021 validation options, simulators fitted <= 2020 (the cached validation paths).
+    Stage 1: every stand-in x bound at alpha = RESID_STAGE1_ALPHA. Stage 2: the stage-1 winner (lowest CVaR95) at
+    the other alphas. Resumable: cells already in results/validation/dh_resid_<world>.csv are not retrained."""
+    opts = dataset.load_options("validation")
+    df, mkt, F, c = dataset.market_arrays(opts)
+    log.info("validation options: %d (%s -> %s)", len(df), df["entry_day"].min(), df["expiry"].max())
+    vdir = config.RESULTS / "validation"
+    vdir.mkdir(parents=True, exist_ok=True)
+    for name in [g for g in (only or config.GENERATORS) if g in config.GENERATORS]:
+        out = vdir / f"dh_resid_{name}.csv"
+        rows = pd.read_csv(out).to_dict("records") if out.exists() else []
+        done = {(r["stand_in"], float(r["bound"]), float(r["alpha"])) for r in rows}
+        P_all = returns_to_prices(generator_paths(name, "validation", config.VAL_FIT_END))
+
+        def run_cell(stage, stand_in, bound, alpha):
+            if (stand_in, float(bound), float(alpha)) in done:
+                return
+            pol, hist, secs = _train_resid(name, P_all, stand_in, bound, alpha)
+            torch.save(pol.state_dict(), _stage_dir("validation") / f"dh_resid_{name}_{stand_in}_c{bound}_a{alpha}.pt")
+            t = evaluate.pnl_table(df, mkt, F, c, evaluate.positions({f"dh_resid_{name}": pol}, mkt, c))
+            s = evaluate.summarize(t).iloc[0].to_dict()
+            s.update({"generator": name, "stage": stage, "stand_in": stand_in, "bound": bound, "alpha": alpha,
+                      "train_seconds": secs, "final_train_objective": hist[-1]})
+            rows.append(s)
+            done.add((stand_in, float(bound), float(alpha)))
+            pd.DataFrame(rows).to_csv(out, index=False)
+            log.info("validation resid %s %s c=%.2f alpha=%.2f: mean loss %.3f, std %.3f, CVaR95 %.3f (%ds)", name, stand_in,
+                     bound, alpha, s["mean_loss"], s["std_loss"], s["cvar95_loss"], secs)
+
+        a1 = config.RESID_STAGE1_ALPHA
+        for stand_in in config.RESID_STAND_INS:
+            for bound in config.RESID_BOUNDS:
+                run_cell(1, stand_in, bound, a1)
+        st1 = pd.DataFrame(rows)
+        st1 = st1[st1["stage"] == 1].reset_index(drop=True)
+        best = st1.loc[st1["cvar95_loss"].idxmin()]
+        log.info("validation resid %s stage 1 winner: %s c=%.2f (CVaR95 %.3f)", name, best["stand_in"], best["bound"], best["cvar95_loss"])
+        for alpha in [a for a in config.ALPHAS if a != a1]:
+            run_cell(2, str(best["stand_in"]), float(best["bound"]), alpha)
+        log.info("validation resid %s choice: %s", name, _resid_choice(name))
+
+
+def final_resid(only: list[str] | None = None) -> None:
+    """Retrain the residual hedgers on the final-stage paths (simulators fitted <= 2021) with the frozen choice."""
+    frozen = json.loads((config.RESULTS / "frozen_config.json").read_text())
+    if frozen.get("selected_residual") != selected_residual():
+        raise SystemExit("frozen config does not match the residual validation files: run freeze first")
+    for name in (only or config.GENERATORS):
+        ch = frozen["selected_residual"][name]
+        R = generator_paths(name, "final", config.FINAL_FIT_END)
+        pol, hist, secs = _train_resid(name, returns_to_prices(R), ch["stand_in"], ch["bound"], ch["alpha"])
+        torch.save(pol.state_dict(), _stage_dir("final") / f"dh_resid_{name}.pt")
+        log.info("final residual policy %s %s trained in %ds (objective %.3f)", name, ch, secs, hist[-1])
+
+
+def load_resid(name: str, stage: str = "final") -> ResidualHedger:
+    sd = torch.load(config.MODELS / stage / f"dh_resid_{name}.pt")
+    pol = ResidualHedger(float(sd["bound"]))
+    pol.load_state_dict(sd)
+    pol.eval()
+    return pol
 
 
 def realism_table() -> pd.DataFrame:
@@ -218,16 +323,19 @@ def test(force: bool = False) -> None:
     if previous and not force:
         raise SystemExit("test already run (see results/test_log.jsonl); use --force to run again (it will be logged)")
     t_start = time.time()
-    alphas = selected_alphas()
+    cfg, cfg_hash = _frozen_cfg()
+    frozen = json.loads((config.RESULTS / "frozen_config.json").read_text())
+    if frozen["config_hash"] != cfg_hash:
+        raise SystemExit(f"config hash {cfg_hash} differs from the frozen config {frozen['config_hash']}: run freeze first")
+    alphas = cfg["selected_alpha"]
     hedgers = dict(BENCHMARKS)
     for name in config.GENERATORS:
         pol = DeepHedger()
         pol.load_state_dict(torch.load(config.MODELS / "final" / f"dh_{name}.pt"))
         pol.eval()
         hedgers[f"dh_{name}"] = pol
-    cfg = config.as_dict()
-    cfg["selected_alpha"] = alphas
-    cfg_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    for name in config.GENERATORS:
+        hedgers[f"dh_resid_{name}"] = load_resid(name)
     _json(config.RESULTS / "test_config.json", cfg)
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"event": "start", "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -236,7 +344,7 @@ def test(force: bool = False) -> None:
     entry = {"event": "done", "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "config_hash": cfg_hash,
              "code_hash": _code_hash(), "forced_rerun": bool(previous), "n_options": int(len(df)), "n_expiries": int(df["expiry"].nunique()),
              "first_entry": str(df["entry_day"].min()), "last_expiry": str(df["expiry"].max()), "selected_alpha": alphas,
-             "seconds": round(time.time() - t_start)}
+             "selected_residual": cfg["selected_residual"], "hedgers": list(hedgers), "seconds": round(time.time() - t_start)}
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     log.info("test logged: %s", entry)
