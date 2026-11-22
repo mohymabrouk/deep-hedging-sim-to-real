@@ -154,6 +154,81 @@ class DeepHedger(nn.Module):
 
 
 # ---------------------------------------------------------------------------------------------------
+# residual deep hedger (added for test run 3): BS delta at the entry vol + a bounded learned correction
+# ---------------------------------------------------------------------------------------------------
+def entry_vol(c: Contracts) -> torch.Tensor:
+    """sigma_entry as a policy input: c.iv0 (fraction), clipped to the 5%-300% IV filter of the real options.
+    On real options c.iv0 is the IV of the entry trade (07:00-08:00 UTC on the entry day), so it is known at entry;
+    on simulated paths it is a stand-in (`entry_vol_stand_in`). It is static over the option's life."""
+    return torch.clamp(c.iv0, config.MIN_IV / 100.0, config.MAX_IV / 100.0)
+
+
+def residual_features(view, t: int, q_prev, c: Contracts, delta):
+    """The six inputs of `policy_features` + sigma_entry + the base BS delta at sigma_entry (all data <= t)."""
+    x = policy_features(view, t, q_prev, c)
+    extra = torch.stack([entry_vol(c), delta], 1).to(torch.float32)
+    return torch.cat([x, extra], 1)
+
+
+class ResidualHedger(nn.Module):
+    """q_t = BS delta(S_t, K, tau_t, sigma_entry) + bound * tanh(MLP(x_t)), clipped to [0, 1] (calls), [-1, 0] (puts).
+
+    The base is exactly the "BS delta, entry IV" benchmark (`BSDelta`, sigma = c.iv0). The MLP has the shape of
+    `DeepHedger` (3 x 64, SiLU) with 8 inputs (`residual_features`); its last layer starts at zero, so an untrained
+    policy *is* the benchmark and training can only move the hedge by at most `bound` BTC per option."""
+
+    N_IN = 8
+
+    def __init__(self, bound: float, hidden: int = config.POLICY_HIDDEN, layers: int = config.POLICY_LAYERS):
+        super().__init__()
+        mods, d = [], self.N_IN
+        for _ in range(layers):
+            mods += [nn.Linear(d, hidden), nn.SiLU()]
+            d = hidden
+        last = nn.Linear(d, 1)
+        nn.init.zeros_(last.weight)
+        nn.init.zeros_(last.bias)
+        mods.append(last)
+        self.net = nn.Sequential(*mods)
+        self.register_buffer("bound", torch.tensor(float(bound), dtype=torch.float64))
+        self.base = BSDelta(use_dvol=False)
+
+    def forward(self, x):
+        return self.net(x).squeeze(-1)
+
+    def act(self, view, t, q_prev, c):
+        delta = self.base.act(view, t, q_prev, c).to(torch.float64)
+        x = residual_features(view, t, q_prev, c, delta)
+        q = delta + self.bound * torch.tanh(self(x)).to(torch.float64)
+        return torch.where(c.is_call, torch.clamp(q, 0.0, 1.0), torch.clamp(q, -1.0, 0.0))
+
+
+def entry_vol_stand_in(P: torch.Tensor, T: torch.Tensor, kind: str, g: torch.Generator | None = None,
+                       H: int = config.HIST) -> torch.Tensor:
+    """sigma_entry for simulated contracts, which have no implied vol. P: [N, L+1] prices, entry at column H.
+
+    'fwd_noisy': realised vol of the path over the option's life (daily returns from entry to expiry, annualised)
+                 x exp(eta * eps - eta^2 / 2), eps ~ N(0, 1) per contract, eta = RESID_IV_NOISE: a noisy forecast
+                 of the vol the option will actually see, which is what an implied vol is. Training only.
+    'trailing':  realised vol of the RESID_TRAIL_WINDOW daily returns up to entry (data <= entry only).
+    Both are clipped to the 5%-300% IV filter of the real options (fraction)."""
+    lr = torch.log(P[:, 1:] / P[:, :-1])  # lr[:, j] = log(P[j+1] / P[j])
+    if kind == "fwd_noisy":
+        j = torch.arange(lr.shape[1]).unsqueeze(0)
+        live = ((j >= H) & (j < H + T.unsqueeze(1))).to(lr.dtype)  # returns H .. H+T-1: entry -> expiry
+        rv = torch.sqrt((lr**2 * live).sum(1) / T.to(lr.dtype) * config.DAYS_PER_YEAR)
+        eta = config.RESID_IV_NOISE
+        eps = torch.randn(len(T), generator=g, dtype=lr.dtype)
+        sig = rv * torch.exp(eta * eps - 0.5 * eta**2)
+    elif kind == "trailing":
+        w = config.RESID_TRAIL_WINDOW
+        sig = torch.sqrt((lr[:, H - w: H] ** 2).mean(1) * config.DAYS_PER_YEAR)
+    else:
+        raise ValueError(kind)
+    return torch.clamp(sig, config.MIN_IV / 100.0, config.MAX_IV / 100.0)
+
+
+# ---------------------------------------------------------------------------------------------------
 # training
 # ---------------------------------------------------------------------------------------------------
 def returns_to_prices(R: np.ndarray, H: int = config.HIST) -> torch.Tensor:
@@ -178,11 +253,22 @@ def cvar_objective(loss, alpha: float):
 
 def train_policy(P_all: torch.Tensor, alpha: float, iters: int = config.POLICY_ITERS, batch: int = config.POLICY_BATCH,
                  cost_rate: float = config.PERP_TAKER_FEE, seed: int = config.SEED, lr: float = config.POLICY_LR,
-                 log_every: int = 250) -> tuple[DeepHedger, list[float]]:
-    """Deep hedging (Buehler et al. 2019): minimise CVaR_alpha of the loss of a short option, in % of S0."""
+                 log_every: int = 250, residual_bound: float | None = None,
+                 stand_in: str | None = None) -> tuple[nn.Module, list[float]]:
+    """Deep hedging (Buehler et al. 2019): minimise CVaR_alpha of the loss of a short option, in % of S0.
+
+    Default: the plain `DeepHedger`. With `residual_bound` and `stand_in`: a `ResidualHedger` whose contracts get
+    sigma_entry = `entry_vol_stand_in(P, T, stand_in)`. The stand-in noise has its own random stream, so for a given
+    seed every stand-in and bound sees the same paths and contracts; the default path draws exactly as before."""
     torch.manual_seed(seed)
     g = torch.Generator().manual_seed(seed)
-    policy = DeepHedger()
+    if residual_bound is None:
+        policy = DeepHedger()
+    else:
+        if stand_in is None:
+            raise ValueError("a residual policy needs a sigma_entry stand-in")
+        policy = ResidualHedger(residual_bound)
+        g_iv = torch.Generator().manual_seed(seed + 1)
     opt = torch.optim.Adam(policy.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, iters, eta_min=lr * 0.05)
     hist, t0 = [], time.time()
@@ -191,6 +277,8 @@ def train_policy(P_all: torch.Tensor, alpha: float, iters: int = config.POLICY_I
         idx = torch.randint(0, M, (batch,), generator=g)
         P = P_all[idx]
         c = sample_contracts(batch, g)
+        if residual_bound is not None:
+            c.iv0 = entry_vol_stand_in(P, c.T, stand_in, g_iv)
         q = run_hedger(policy, {"P": P}, c)
         res = hedge_pnl(price_window(P, c.T), q, payoff_on_path(P, c), cost_rate=cost_rate)
         loss = -100.0 * res["pnl"]  # % of S0
@@ -201,7 +289,7 @@ def train_policy(P_all: torch.Tensor, alpha: float, iters: int = config.POLICY_I
         sched.step()
         hist.append(float(obj.detach()))
         if log_every and (it % log_every == 0 or it == iters - 1):
-            log.info("  it %4d  CVaR%.2f %.4f  (%.0fs)", it, alpha, float(obj), time.time() - t0)
+            log.info("  it %4d  CVaR%.2f %.4f  (%.0fs)", it, alpha, float(obj.detach()), time.time() - t0)
     policy.eval()
     return policy, hist
 
