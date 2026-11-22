@@ -1,0 +1,18 @@
+{
+ "declared_at_utc": "2026-11-22T10:59:32+00:00",
+ "see": "PLAN.md, change 15",
+ "constants": {
+  "RESID_STAND_INS": [
+   "fwd_noisy",
+   "trailing"
+  ],
+  "RESID_IV_NOISE": 0.3,
+  "RESID_TRAIL_WINDOW": 20,
+  "RESID_BOUNDS": [
+   0.1,
+   0.3
+  ],
+  "RESID_STAGE1_ALPHA": 0.9
+ },
+ "selection": "per world: stage 1 = every stand-in x bound at RESID_STAGE1_ALPHA; stage 2 = stage-1 winner at the other ALPHAS; choose the lowest validation CVaR95 loss (1x fees)"
+}
