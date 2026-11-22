@@ -72,7 +72,17 @@ BOOT_REPS = 2000
 BOOT_BLOCK = 4  # consecutive expiry dates per bootstrap block (about one month of weekly expiries)
 
 GENERATORS = ("bootstrap", "garch", "rough", "diffusion")
-HEDGERS = ("no_hedge", "bs_iv", "bs_dvol") + tuple(f"dh_{g}" for g in GENERATORS)
+
+# ---- residual deep hedgers (added for test run 3; pre-declared in PLAN.md, change 15, before any validation run) ----
+# q = BS delta(sigma_entry) + bound * tanh(MLP(x)); sigma_entry = entry IV on real options, a stand-in on simulated paths
+RESID_STAND_INS = ("fwd_noisy", "trailing")  # see hedging.entry_vol_stand_in
+RESID_IV_NOISE = 0.3  # eta of the lognormal noise of the "fwd_noisy" stand-in (not tuned)
+RESID_TRAIL_WINDOW = 20  # days of returns before entry for the "trailing" stand-in
+RESID_BOUNDS = (0.1, 0.3)  # correction bound c (BTC per option)
+RESID_STAGE1_ALPHA = 0.9  # validation stage 1: stand-in x bound at this CVaR level; stage 2: the other ALPHAS
+
+HEDGERS = (("no_hedge", "bs_iv", "bs_dvol") + tuple(f"dh_{g}" for g in GENERATORS)
+           + tuple(f"dh_resid_{g}" for g in GENERATORS))
 
 
 def as_dict() -> dict:
