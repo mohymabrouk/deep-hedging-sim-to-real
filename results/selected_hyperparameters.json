@@ -1,0 +1,9 @@
+{
+ "criterion": "lowest validation CVaR95 loss (1x fees)",
+ "alpha": {
+  "bootstrap": 0.99,
+  "garch": 0.9,
+  "rough": 0.9,
+  "diffusion": 0.99
+ }
+}
