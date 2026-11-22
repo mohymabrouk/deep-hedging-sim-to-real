@@ -10,20 +10,27 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import torch  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.transforms import blended_transform_factory  # noqa: E402
 
 from dh import config  # noqa: E402
 from dh.hedging import Contracts, DeepHedger, bs_delta  # noqa: E402
-from dh.pipeline import realism_table  # noqa: E402
+from dh.pipeline import load_resid, realism_table  # noqa: E402
 
 log = logging.getLogger(__name__)
 
+WORLD = {"bootstrap": "bootstrap", "garch": "GARCH-t", "rough": "rough-vol", "diffusion": "diffusion"}
 LABEL = {"no_hedge": "No hedge", "bs_iv": "BS delta, entry IV", "bs_dvol": "BS delta, IV moved by DVOL",
-         "dh_bootstrap": "Deep hedge, bootstrap world", "dh_garch": "Deep hedge, GARCH-t world",
-         "dh_rough": "Deep hedge, rough-vol world", "dh_diffusion": "Deep hedge, diffusion world"}
-# categorical slots in fixed order (reference palette); "no hedge" is a neutral reference
+         **{f"dh_{g}": f"Deep hedge, {w} world" for g, w in WORLD.items()},
+         **{f"dh_resid_{g}": f"Residual deep hedge, {w} world" for g, w in WORLD.items()}}
+# categorical slots in fixed order (reference palette); "no hedge" is a neutral reference. A world keeps its hue in
+# both deep-hedger families; the family is shown by the marker (hollow = existing, filled = residual) or the panel.
 COLOR = {"no_hedge": "#8a8984", "bs_iv": "#2a78d6", "bs_dvol": "#eb6834", "dh_bootstrap": "#1baf7a",
          "dh_garch": "#eda100", "dh_rough": "#e87ba4", "dh_diffusion": "#008300"}
+COLOR.update({f"dh_resid_{g}": COLOR[f"dh_{g}"] for g in config.GENERATORS})
 INK, INK2, SURFACE, GRID = "#0b0b0b", "#52514e", "#fcfcfb", "#e4e3df"
+PLAIN = [f"dh_{g}" for g in config.GENERATORS]
+RESID = [f"dh_resid_{g}" for g in config.GENERATORS]
 
 
 def _style(ax):
@@ -37,39 +44,45 @@ def _style(ax):
     ax.set_axisbelow(True)
 
 
+def _present(t: pd.DataFrame, names) -> list[str]:
+    have = set(t["hedger"])
+    return [h for h in names if h in have]
+
+
 def fig_pnl_distributions(t: pd.DataFrame, out) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6), facecolor=SURFACE)
-    ax = axes[0]
-    _style(ax)
+    """Row 1: existing deep hedgers; row 2 (if scored): residual deep hedgers; both against the BS benchmarks."""
+    families = [("existing deep hedgers", PLAIN)] + ([("residual deep hedgers", RESID)] if _present(t, RESID) else [])
+    fig, axes = plt.subplots(len(families), 2, figsize=(12, 4.6 * len(families)), facecolor=SURFACE, squeeze=False)
     lo, hi = np.percentile(t.loc[t["hedger"] != "no_hedge", "loss"], [0.5, 99.5])
     bins = np.linspace(lo, hi, 70)
-    for h in config.HEDGERS:
-        if h == "no_hedge":
-            continue
-        x = t.loc[t["hedger"] == h, "loss"]
-        ax.hist(x, bins=bins, histtype="step", linewidth=2, color=COLOR[h], label=LABEL[h], density=True)
-    ax.set_xlabel("loss, % of S0 (positive = money lost)", color=INK2)
-    ax.set_ylabel("density", color=INK2)
-    ax.set_title("Loss distribution on test options (hedged strategies)", color=INK, fontsize=11, loc="left")
-    ax.legend(fontsize=8, frameon=False)
-    ax = axes[1]
-    _style(ax)
     p = np.linspace(0.90, 0.999, 200)
-    for h in config.HEDGERS:
-        x = t.loc[t["hedger"] == h, "loss"].to_numpy()
-        ax.plot(100 * p, np.quantile(x, p), linewidth=2, color=COLOR[h], label=LABEL[h])
-    ax.set_xlabel("loss quantile level, %", color=INK2)
-    ax.set_ylabel("loss, % of S0", color=INK2)
-    ax.set_title("Right tail: loss quantiles from 90% to 99.9%", color=INK, fontsize=11, loc="left")
-    ax.legend(fontsize=8, frameon=False)
+    for row, (fam, deep) in enumerate(families):
+        ax = axes[row, 0]
+        _style(ax)
+        for h in _present(t, ["bs_iv", "bs_dvol"] + deep):
+            x = t.loc[t["hedger"] == h, "loss"]
+            ax.hist(x, bins=bins, histtype="step", linewidth=2, color=COLOR[h], label=LABEL[h], density=True)
+        ax.set_xlabel("loss, % of S0 (positive = money lost)", color=INK2)
+        ax.set_ylabel("density", color=INK2)
+        ax.set_title(f"Loss distribution on test options: {fam}", color=INK, fontsize=11, loc="left")
+        ax.legend(fontsize=8, frameon=False)
+        ax = axes[row, 1]
+        _style(ax)
+        for h in _present(t, ["no_hedge", "bs_iv", "bs_dvol"] + deep):
+            x = t.loc[t["hedger"] == h, "loss"].to_numpy()
+            ax.plot(100 * p, np.quantile(x, p), linewidth=2, color=COLOR[h], label=LABEL[h])
+        ax.set_xlabel("loss quantile level, %", color=INK2)
+        ax.set_ylabel("loss, % of S0", color=INK2)
+        ax.set_title(f"Right tail, loss quantiles 90% to 99.9%: {fam}", color=INK, fontsize=11, loc="left")
+        ax.legend(fontsize=8, frameon=False)
     fig.tight_layout()
     fig.savefig(out, dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
 
 def fig_hedge_ratio(out) -> None:
-    """Hedge ratio at entry vs log-moneyness for a 14-day option, realised vol 50%, previous hedge = BS delta."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.4), facecolor=SURFACE, sharey=False)
+    """Hedge ratio at entry vs log-moneyness for a 14-day option, realised vol 50% (and entry IV 50% for the residual
+    policies), previous hedge = BS delta. Row 1: existing deep hedgers; row 2: residual deep hedgers (if trained)."""
     H, sigma, T_left = config.HIST, 0.5, 14
     logm = np.linspace(-0.2, 0.2, 81)  # log(S/K)
     n = len(logm)
@@ -77,46 +90,113 @@ def fig_hedge_ratio(out) -> None:
     lp = np.concatenate([np.zeros((n, 1)), np.cumsum(r, 1)], 1)
     P = torch.as_tensor(np.exp(lp - lp[:, [-1]]))
     K = torch.as_tensor(np.exp(-logm))
-    for ax, call in zip(axes, (True, False)):
-        _style(ax)
-        c = Contracts(K, torch.full((n,), T_left), torch.full((n,), call))
-        delta = bs_delta(torch.ones(n, dtype=torch.float64), K, torch.full((n,), T_left / 365.0, dtype=torch.float64),
-                         torch.full((n,), sigma, dtype=torch.float64), c.is_call)
-        ax.plot(logm, delta.numpy(), color=INK, linestyle="--", linewidth=2, label="BS delta, sigma = 50%")
-        for g in config.GENERATORS:
-            path = config.MODELS / "final" / f"dh_{g}.pt"
-            if not path.exists():
-                continue
-            pol = DeepHedger()
-            pol.load_state_dict(torch.load(path))
-            pol.eval()
-            with torch.no_grad():
-                q = pol.act({"P": P}, 0, delta, c).numpy()
-            ax.plot(logm, q, color=COLOR[f"dh_{g}"], linewidth=2, label=LABEL[f"dh_{g}"])
-        ax.set_xlabel("log(S/K)", color=INK2)
-        ax.set_ylabel("hedge ratio (BTC per option)", color=INK2)
-        ax.set_title(f"{'Call' if call else 'Put'}: 14 days left, realised vol 50%", color=INK, fontsize=11, loc="left")
-        ax.legend(fontsize=8, frameon=False)
+    have_resid = all((config.MODELS / "final" / f"dh_resid_{g}.pt").exists() for g in config.GENERATORS)
+    rows = [("existing deep hedgers, realised vol 50%", "plain")] + (
+        [("residual deep hedgers, realised vol and entry IV 50%", "resid")] if have_resid else [])
+    fig, axes = plt.subplots(len(rows), 2, figsize=(12, 4.4 * len(rows)), facecolor=SURFACE, squeeze=False)
+    for i, (fam, kind) in enumerate(rows):
+        for ax, call in zip(axes[i], (True, False)):
+            _style(ax)
+            c = Contracts(K, torch.full((n,), T_left), torch.full((n,), call), iv0=np.full(n, sigma))
+            delta = bs_delta(torch.ones(n, dtype=torch.float64), K, torch.full((n,), T_left / 365.0, dtype=torch.float64),
+                             torch.full((n,), sigma, dtype=torch.float64), c.is_call)
+            ax.plot(logm, delta.numpy(), color=INK, linestyle="--", linewidth=2, label="BS delta, sigma = 50%")
+            for g in config.GENERATORS:
+                if kind == "plain":
+                    path = config.MODELS / "final" / f"dh_{g}.pt"
+                    if not path.exists():
+                        continue
+                    pol = DeepHedger()
+                    pol.load_state_dict(torch.load(path))
+                    pol.eval()
+                    name = f"dh_{g}"
+                else:
+                    pol, name = load_resid(g), f"dh_resid_{g}"
+                with torch.no_grad():
+                    q = pol.act({"P": P}, 0, delta, c).numpy()
+                ax.plot(logm, q, color=COLOR[name], linewidth=2, label=LABEL[name])
+            ax.set_xlabel("log(S/K)", color=INK2)
+            ax.set_ylabel("hedge ratio (BTC per option)", color=INK2)
+            ax.set_title(f"{'Call' if call else 'Put'}, 14 days left: {fam}", color=INK, fontsize=10.5, loc="left")
+            ax.legend(fontsize=8, frameon=False)
     fig.tight_layout()
     fig.savefig(out, dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
 
 def fig_paired(perf: pd.DataFrame, out) -> None:
-    rows = perf[perf["hedger"] != "bs_iv"].reset_index(drop=True)
-    fig, axes = plt.subplots(1, 2, figsize=(13, 3.8), facecolor=SURFACE)
+    """Paired improvement vs BS delta (entry IV) for every hedger but no hedge (off scale; see the tables)."""
+    rows = perf[~perf["hedger"].isin(["bs_iv", "no_hedge"])].reset_index(drop=True)
+    fig, axes = plt.subplots(1, 2, figsize=(13, 0.42 * len(rows) + 1.6), facecolor=SURFACE)
     for ax, (m, lo, hi, title) in zip(axes, [("d_mean_loss", "d_mean_lo", "d_mean_hi", "Mean loss reduction vs BS delta (entry IV)"),
                                              ("d_cvar95", "d_cvar_lo", "d_cvar_hi", "CVaR95 loss reduction vs BS delta (entry IV)")]):
         _style(ax)
         y = np.arange(len(rows))[::-1]
         for yi, (_, r) in zip(y, rows.iterrows()):
+            filled = r["hedger"].startswith("dh_resid_") or not r["hedger"].startswith("dh_")
             ax.plot([r[lo], r[hi]], [yi, yi], color=COLOR[r["hedger"]], linewidth=2)
-            ax.plot(r[m], yi, "o", markersize=8, color=COLOR[r["hedger"]], markeredgecolor=SURFACE, markeredgewidth=2)
+            ax.plot(r[m], yi, "o", markersize=8, color=COLOR[r["hedger"]] if filled else SURFACE,
+                    markeredgecolor=COLOR[r["hedger"]], markeredgewidth=2)
         ax.axvline(0, color=INK2, linewidth=1)
         ax.set_yticks(y, [LABEL[h] for h in rows["hedger"]], fontsize=9, color=INK)
         ax.set_xlabel("% of S0, > 0 = better than BS delta (95% block-bootstrap CI)", color=INK2, fontsize=9)
         ax.set_title(title, color=INK, fontsize=11, loc="left")
     fig.tight_layout()
+    fig.savefig(out, dpi=150, facecolor=SURFACE)
+    plt.close(fig)
+
+
+def fig_headline(perf: pd.DataFrame, n_options: int, run_no: int, out) -> None:
+    """The one figure under the README headline: change in CVaR95 loss vs BS delta at the entry IV, with the paired
+    block-bootstrap 95% CI, for each world's existing (hollow) and residual (filled) deep hedger."""
+    p = perf.set_index("hedger")
+    worlds = [g for g in config.GENERATORS if f"dh_{g}" in p.index]
+    n_rows = sum(int(h in p.index) for g in worlds for h in (f"dh_{g}", f"dh_resid_{g}"))
+    height = 0.48 * n_rows + 0.35 * len(worlds) + 2.2
+    fig, ax = plt.subplots(figsize=(11, height), facecolor=SURFACE)
+    fig.subplots_adjust(left=0.21, right=0.78, top=1 - 1.25 / height, bottom=0.75 / height)
+    _style(ax)
+    ax.grid(True, axis="x", color=GRID, linewidth=0.8)
+    ax.grid(False, axis="y")
+    yt, yl, y = [], [], 0.0
+    rows = []
+    for g in worlds:
+        for name, fam in ((f"dh_resid_{g}", "residual"), (f"dh_{g}", "existing")):
+            if name in p.index:
+                rows.append((y, name, fam))
+                yt.append(y)
+                yl.append(f"{WORLD[g]} world, {fam}")
+                y -= 1.0
+        y -= 0.6
+    xs = np.concatenate([p.loc[[r[1] for r in rows], "d_cvar_lo"], p.loc[[r[1] for r in rows], "d_cvar_hi"], [0.0]])
+    pad = 0.08 * (xs.max() - xs.min())
+    ax.set_xlim(xs.min() - pad, xs.max() + pad)
+    ax.axvspan(0, xs.max() + pad, color="#2a78d6", alpha=0.05, linewidth=0)
+    ax.axvline(0, color=INK, linewidth=1.2)
+    for yi, name, fam in rows:
+        r = p.loc[name]
+        col = COLOR[name]
+        ax.plot([r["d_cvar_lo"], r["d_cvar_hi"]], [yi, yi], color=col, linewidth=2.2, solid_capstyle="round")
+        ax.plot(r["d_cvar95"], yi, "o", markersize=9, markeredgewidth=2, markeredgecolor=col,
+                color=col if fam == "residual" else SURFACE, zorder=3)
+        tr = blended_transform_factory(ax.transAxes, ax.transData)
+        ax.text(1.01, yi, f"{r['d_cvar95']:+.2f}  [{r['d_cvar_lo']:+.2f}, {r['d_cvar_hi']:+.2f}]", transform=tr, va="center",
+                ha="left", fontsize=9, color=INK2, family="monospace")
+    tr = blended_transform_factory(ax.transAxes, ax.transAxes)
+    ax.text(1.01, 1.0, "Δ CVaR95 [95% CI]", transform=tr, va="bottom", ha="left", fontsize=9, color=INK)
+    ax.set_yticks(yt, yl, fontsize=9.5, color=INK)
+    ax.tick_params(axis="y", length=0)
+    ax.set_ylim(min(yt) - 0.8, max(yt) + 0.8)
+    ax.set_xlabel("Δ CVaR95 loss vs BS delta at the entry IV, % of S0    (> 0 = smaller tail loss than BS delta)",
+                  color=INK2, fontsize=9.5)
+    ax.text(0, max(yt) + 0.75, "BS delta, entry IV", ha="center", va="bottom", fontsize=8.5, color=INK, clip_on=False)
+    handles = [Line2D([], [], marker="o", linestyle="", markersize=9, markeredgewidth=2, color=INK2, markeredgecolor=INK2,
+                      label="residual: BS delta at entry IV + bounded learned correction"),
+               Line2D([], [], marker="o", linestyle="", markersize=9, markeredgewidth=2, color=SURFACE, markeredgecolor=INK2,
+                      label="existing: MLP on realised-vol features only")]
+    fig.text(0.01, 1 - 0.18 / height, f"Deep hedgers vs Black-Scholes delta on {n_options:,} real Deribit BTC options, 2022-2026 "
+             f"(test run {run_no})", color=INK, fontsize=12, ha="left", va="top")
+    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.005, 1 - 0.45 / height), ncol=2, frameon=False, fontsize=9)
     fig.savefig(out, dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
@@ -147,6 +227,37 @@ def perf_md(perf: pd.DataFrame) -> str:
     return _md(pd.DataFrame(rows))
 
 
+def run_comparison(perf: pd.DataFrame, t: pd.DataFrame, prev_dir, run_no: int) -> tuple[str, pd.DataFrame | None]:
+    """Run 2 (archived in prev_dir) vs the current run, side by side, and the reproduction check: for every hedger
+    scored in both runs, the largest absolute difference in any summary statistic and in any single option's P&L."""
+    if not (prev_dir / "performance_test.csv").exists():
+        return "", None
+    prev = pd.read_csv(prev_dir / "performance_test.csv").set_index("hedger")
+    cur = perf.set_index("hedger")
+    rows = []
+    for h in cur.index:
+        a = prev.loc[h] if h in prev.index else None
+        b = cur.loc[h]
+        rows.append({"hedger": LABEL[h],
+                     "run 2: CVaR95 loss": "n/a" if a is None else f"{a['cvar95_loss']:.3f}",
+                     "run 2: Δ CVaR95 vs BS-IV [95% CI]": "n/a" if a is None else ("—" if h == "bs_iv" else _ci(a["d_cvar95"], a["d_cvar_lo"], a["d_cvar_hi"])),
+                     f"run {run_no}: CVaR95 loss": f"{b['cvar95_loss']:.3f}",
+                     f"run {run_no}: Δ CVaR95 vs BS-IV [95% CI]": "—" if h == "bs_iv" else _ci(b["d_cvar95"], b["d_cvar_lo"], b["d_cvar_hi"]),
+                     f"run {run_no}: Δ mean loss vs BS-IV [95% CI]": "—" if h == "bs_iv" else _ci(b["d_mean_loss"], b["d_mean_lo"], b["d_mean_hi"])})
+    side = _md(pd.DataFrame(rows))
+    t_prev = pd.read_csv(prev_dir / "test_pnl_per_option.csv")
+    num = [c for c in prev.columns if c in cur.columns and np.issubdtype(prev[c].dtype, np.number)]
+    rep = []
+    for h in [h for h in cur.index if h in prev.index]:
+        a = t_prev[t_prev["hedger"] == h].set_index("instrument")["pnl"]
+        b = t[t["hedger"] == h].set_index("instrument")["pnl"]
+        rep.append({"hedger": h, "n_options": int(len(b)), "same_options": bool(a.index.sort_values().equals(b.index.sort_values())),
+                    "max_abs_diff_summary": float(np.nanmax(np.abs(prev.loc[h, num].to_numpy(float) - cur.loc[h, num].to_numpy(float)))),
+                    "max_abs_diff_option_pnl": float((a - b.reindex(a.index)).abs().max())})
+    rep = pd.DataFrame(rep)
+    return side, rep
+
+
 def run() -> None:
     R = config.RESULTS
     out = []
@@ -160,6 +271,14 @@ def run() -> None:
                f"{log_line['n_expiries']} expiries, entries from {log_line['first_entry']}, last expiry {log_line['last_expiry']}.\n")
     out.append("## Performance on test options (1x fees; loss and money in % of S0; Δ > 0 = better than BS-IV)\n")
     out.append(perf_md(perf))
+    prev_dir = R / "run2_official"
+    side, rep = run_comparison(perf, t, prev_dir, len(runs))
+    if side:
+        out.append(f"\n## Run 2 vs run {len(runs)}, test options (1x fees; % of S0; run 2 is archived in `results/run2_official/`)\n")
+        out.append(side)
+        out.append("\n## Reproduction check: hedgers scored in both runs (largest absolute difference, % of S0)\n")
+        out.append(_md(rep, "{:.2e}"))
+        rep.to_csv(R / "reproduction_vs_run2.csv", index=False)
     splits = pd.read_csv(R / "performance_splits.csv")
     for split, part in splits.groupby("split", sort=False):
         out.append(f"\n## Split: {split} (n = {int(part['n'].iloc[0])} options)\n")
@@ -178,11 +297,22 @@ def run() -> None:
     val = pd.concat([pd.read_csv(R / "validation" / f"dh_{g}.csv") for g in config.GENERATORS], ignore_index=True)
     out.append("\n## Validation (2021 options): CVaR level alpha per generator (chosen = lowest CVaR95 loss)\n")
     out.append(_md(val[["generator", "alpha", "n", "mean_pnl", "std_loss", "cvar95_loss", "turnover", "train_seconds"]]))
+    vr = [R / "validation" / f"dh_resid_{g}.csv" for g in config.GENERATORS]
+    if all(p.exists() for p in vr):
+        v = pd.concat([pd.read_csv(p) for p in vr], ignore_index=True)
+        best = v.groupby("generator")["cvar95_loss"].transform("min")
+        v["chosen"] = np.where(v["cvar95_loss"] == best, "yes", "")
+        out.append("\n## Validation (2021 options): residual hedgers, sigma_entry stand-in x bound c x alpha "
+                   f"(stage 1 at alpha = {config.RESID_STAGE1_ALPHA}, stage 2 = stage-1 winner at the other alphas; "
+                   "chosen = lowest CVaR95 loss)\n")
+        out.append(_md(v[["generator", "stage", "stand_in", "bound", "alpha", "n", "mean_pnl", "std_loss", "cvar95_loss", "turnover",
+                          "train_seconds", "chosen"]]))
     vb = pd.read_csv(R / "validation" / "benchmarks.csv")
     out.append("\n## Validation benchmarks (2021 options)\n")
     out.append(_md(vb[["hedger", "n", "mean_pnl", "std_loss", "cvar95_loss", "turnover", "perp_fees", "funding"]]))
     (R / "tables.md").write_text("\n".join(out) + "\n", encoding="utf-8")
     rt.to_csv(R / "realism.csv", index=False)
+    fig_headline(perf, int(log_line["n_options"]), len(runs), R / "fig_headline.png")
     fig_pnl_distributions(t, R / "fig_pnl_distributions.png")
     fig_hedge_ratio(R / "fig_hedge_ratio_vs_moneyness.png")
     fig_paired(perf, R / "fig_paired_improvement.png")
