@@ -1,0 +1,18 @@
+{
+ "generator": "garch",
+ "stage": "validation",
+ "fit_end": "2020-12-31",
+ "train_first_day": "2018-01-02",
+ "train_last_day": "2020-12-31",
+ "n_train_days": 1083,
+ "martingale_shift_per_day": 0.0015815199173045442,
+ "fit_and_sample_seconds": 1,
+ "omega_pct2": 0.22871486987155104,
+ "alpha": 0.08621018631414999,
+ "beta": 0.9137898136858588,
+ "nu": 2.9409067435398244,
+ "persistence": 1.0000000000000087,
+ "loglik": -2817.429659876875,
+ "start_vol_median_annual": 0.7123708834653573,
+ "vol_cap_annual": 2.4569182894241144
+}

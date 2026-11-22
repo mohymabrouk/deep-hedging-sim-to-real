@@ -1,0 +1,87 @@
+{
+ "VAL_FIT_END": "2020-12-31",
+ "FINAL_FIT_END": "2021-12-31",
+ "VAL_START": "2021-01-01",
+ "VAL_END": "2021-12-31",
+ "TEST_START": "2022-01-01",
+ "SUBPERIOD_SPLIT": "2024-01-01",
+ "SPOT_FIRST_MONTH": [
+  2018,
+  1
+ ],
+ "SPOT_5M_LAST_MONTH": [
+  2021,
+  12
+ ],
+ "PERP_FIRST_MONTH": [
+  2020,
+  1
+ ],
+ "DERIBIT_FIRST_DAY": "2021-01-01",
+ "SNAPSHOT_HOUR_START": 7,
+ "SNAPSHOT_HOUR_END": 8,
+ "REBALANCE_HOUR": 8,
+ "MIN_DAYS": 7,
+ "MAX_DAYS": 35,
+ "MAX_ABS_LOG_MONEYNESS": 0.2,
+ "MIN_PRICE_BTC": 0.0005,
+ "MIN_IV": 5.0,
+ "MAX_IV": 300.0,
+ "PERP_TAKER_FEE": 0.0005,
+ "OPTION_TAKER_FEE": 0.0003,
+ "OPTION_FEE_CAP": 0.125,
+ "FEE_MULTIPLIERS": [
+  0.0,
+  1.0,
+  2.0
+ ],
+ "HIST": 24,
+ "PATH_LEN": 64,
+ "RV_WINDOW": 10,
+ "DAYS_PER_YEAR": 365.0,
+ "N_SIM_PATHS": 20000,
+ "BOOTSTRAP_MEAN_BLOCK": 20,
+ "ROUGH_MAX_LAG": 30,
+ "ALPHAS": [
+  0.5,
+  0.9,
+  0.99
+ ],
+ "POLICY_HIDDEN": 64,
+ "POLICY_LAYERS": 3,
+ "POLICY_BATCH": 4096,
+ "POLICY_ITERS": 1500,
+ "POLICY_LR": 0.002,
+ "SEED": 20260101,
+ "DIFF_STEPS": 1000,
+ "DIFF_SAMPLE_STEPS": 50,
+ "DIFF_TRAIN_ITERS": 8000,
+ "DIFF_BATCH": 128,
+ "DIFF_LR": 0.0003,
+ "DIFF_CHANNELS": 32,
+ "DIFF_X0_CLIP": 15.0,
+ "CVAR_LEVEL": 0.95,
+ "BOOT_REPS": 2000,
+ "BOOT_BLOCK": 4,
+ "GENERATORS": [
+  "bootstrap",
+  "garch",
+  "rough",
+  "diffusion"
+ ],
+ "HEDGERS": [
+  "no_hedge",
+  "bs_iv",
+  "bs_dvol",
+  "dh_bootstrap",
+  "dh_garch",
+  "dh_rough",
+  "dh_diffusion"
+ ],
+ "selected_alpha": {
+  "bootstrap": 0.99,
+  "garch": 0.9,
+  "rough": 0.9,
+  "diffusion": 0.99
+ }
+}

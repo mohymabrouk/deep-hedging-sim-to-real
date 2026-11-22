@@ -1,0 +1,180 @@
+{
+ "frozen_at_utc": "2026-11-19T09:19:29+00:00",
+ "rule": "per world, the CVaR level alpha with the lowest CVaR95 loss on the 2021 validation options (1x fees)",
+ "config_hash": "d2f906a2dba41748",
+ "selected_alpha": {
+  "bootstrap": 0.99,
+  "garch": 0.9,
+  "rough": 0.9,
+  "diffusion": 0.99
+ },
+ "validation_scores": {
+  "bootstrap": [
+   {
+    "alpha": 0.5,
+    "mean_pnl": 0.6367302354232773,
+    "std_loss": 3.2328236541866944,
+    "cvar95_loss": 8.412133193882957
+   },
+   {
+    "alpha": 0.9,
+    "mean_pnl": 0.44679866096899307,
+    "std_loss": 2.944309183489093,
+    "cvar95_loss": 7.639837866175255
+   },
+   {
+    "alpha": 0.99,
+    "mean_pnl": 0.4043958123554472,
+    "std_loss": 2.954369887280731,
+    "cvar95_loss": 7.3096649488033085
+   }
+  ],
+  "garch": [
+   {
+    "alpha": 0.5,
+    "mean_pnl": 0.6522665772152489,
+    "std_loss": 3.2891224525611737,
+    "cvar95_loss": 8.413064175608802
+   },
+   {
+    "alpha": 0.9,
+    "mean_pnl": 0.5588539439868029,
+    "std_loss": 3.1507988420022546,
+    "cvar95_loss": 6.077441193276508
+   },
+   {
+    "alpha": 0.99,
+    "mean_pnl": 0.8702288009153487,
+    "std_loss": 6.664837903907937,
+    "cvar95_loss": 16.59050272169214
+   }
+  ],
+  "rough": [
+   {
+    "alpha": 0.5,
+    "mean_pnl": 0.41322769104352525,
+    "std_loss": 2.5649978172406374,
+    "cvar95_loss": 6.498165474397944
+   },
+   {
+    "alpha": 0.9,
+    "mean_pnl": 0.43829807017915645,
+    "std_loss": 2.5789830529876667,
+    "cvar95_loss": 6.30319870696436
+   },
+   {
+    "alpha": 0.99,
+    "mean_pnl": 0.5137488352031426,
+    "std_loss": 3.163542003623317,
+    "cvar95_loss": 6.4379916259728915
+   }
+  ],
+  "diffusion": [
+   {
+    "alpha": 0.5,
+    "mean_pnl": 0.34574750620274747,
+    "std_loss": 4.376020584417293,
+    "cvar95_loss": 12.318317915977868
+   },
+   {
+    "alpha": 0.9,
+    "mean_pnl": 0.4745030521233998,
+    "std_loss": 3.086860464358357,
+    "cvar95_loss": 7.953941580347615
+   },
+   {
+    "alpha": 0.99,
+    "mean_pnl": 0.4738845000327642,
+    "std_loss": 2.991428815648187,
+    "cvar95_loss": 7.203935972107064
+   }
+  ]
+ },
+ "config": {
+  "VAL_FIT_END": "2020-12-31",
+  "FINAL_FIT_END": "2021-12-31",
+  "VAL_START": "2021-01-01",
+  "VAL_END": "2021-12-31",
+  "TEST_START": "2022-01-01",
+  "SUBPERIOD_SPLIT": "2024-01-01",
+  "SPOT_FIRST_MONTH": [
+   2018,
+   1
+  ],
+  "SPOT_5M_LAST_MONTH": [
+   2021,
+   12
+  ],
+  "PERP_FIRST_MONTH": [
+   2020,
+   1
+  ],
+  "DERIBIT_FIRST_DAY": "2021-01-01",
+  "SNAPSHOT_HOUR_START": 7,
+  "SNAPSHOT_HOUR_END": 8,
+  "REBALANCE_HOUR": 8,
+  "MIN_DAYS": 7,
+  "MAX_DAYS": 35,
+  "MAX_ABS_LOG_MONEYNESS": 0.2,
+  "MIN_PRICE_BTC": 0.0005,
+  "MIN_IV": 5.0,
+  "MAX_IV": 300.0,
+  "PERP_TAKER_FEE": 0.0005,
+  "OPTION_TAKER_FEE": 0.0003,
+  "OPTION_FEE_CAP": 0.125,
+  "FEE_MULTIPLIERS": [
+   0.0,
+   1.0,
+   2.0
+  ],
+  "HIST": 24,
+  "PATH_LEN": 64,
+  "RV_WINDOW": 10,
+  "DAYS_PER_YEAR": 365.0,
+  "N_SIM_PATHS": 20000,
+  "BOOTSTRAP_MEAN_BLOCK": 20,
+  "ROUGH_MAX_LAG": 30,
+  "ALPHAS": [
+   0.5,
+   0.9,
+   0.99
+  ],
+  "POLICY_HIDDEN": 64,
+  "POLICY_LAYERS": 3,
+  "POLICY_BATCH": 4096,
+  "POLICY_ITERS": 1500,
+  "POLICY_LR": 0.002,
+  "SEED": 20260101,
+  "DIFF_STEPS": 1000,
+  "DIFF_SAMPLE_STEPS": 50,
+  "DIFF_TRAIN_ITERS": 8000,
+  "DIFF_BATCH": 128,
+  "DIFF_LR": 0.0003,
+  "DIFF_CHANNELS": 32,
+  "DIFF_X0_CLIP": 15.0,
+  "CVAR_LEVEL": 0.95,
+  "BOOT_REPS": 2000,
+  "BOOT_BLOCK": 4,
+  "GENERATORS": [
+   "bootstrap",
+   "garch",
+   "rough",
+   "diffusion"
+  ],
+  "HEDGERS": [
+   "no_hedge",
+   "bs_iv",
+   "bs_dvol",
+   "dh_bootstrap",
+   "dh_garch",
+   "dh_rough",
+   "dh_diffusion"
+  ],
+  "selected_alpha": {
+   "bootstrap": 0.99,
+   "garch": 0.9,
+   "rough": 0.9,
+   "diffusion": 0.99
+  }
+ }
+}
