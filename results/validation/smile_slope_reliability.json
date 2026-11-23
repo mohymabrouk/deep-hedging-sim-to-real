@@ -1,0 +1,13 @@
+{
+ "n_options": 1388,
+ "coverage": 0.9351585014409222,
+ "n_split_pairs": 784,
+ "split_half_pearson": 0.9429579268967959,
+ "split_half_spearman": 0.9501768519759355,
+ "theta_median": -0.1339023041301926,
+ "theta_p05": -1.0122517127472985,
+ "theta_p95": 0.6851837011640005,
+ "share_at_clip": 0.003852080123266564,
+ "rule": "keep if coverage >= 0.5, split-half Pearson >= 0.5 on >= 200 options",
+ "kept": true
+}
