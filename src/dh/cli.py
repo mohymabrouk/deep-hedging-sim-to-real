@@ -1,8 +1,10 @@
 """Command line: python -m dh.cli <stage>.
 
-Stages, in order: download, build, validate, [validate_resid], freeze, final, [final_resid], test, report. Each
-writes its outputs to files, so a stage can be rerun alone. `test` runs once: it refuses to run again unless --force
-(which is logged). validate_resid / final_resid are the residual hedgers added for test run 3.
+Stages, in order: download, build, validate, [validate_resid], [validate_classical], freeze, final, [final_resid], test,
+report, [compat], [haircut]. Each writes its outputs to files, so a stage can be rerun alone. `test` runs once: it
+refuses to run again unless --force (which is logged). validate_resid / final_resid are the residual hedgers added for
+test run 3; validate_classical the classical hedgers of test run 4; compat and haircut are the descriptive checks of
+PLAN.md change 17 (they train and select nothing).
 """
 
 import argparse
@@ -20,8 +22,8 @@ def setup_logging(stage: str) -> None:
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="dh")
-    p.add_argument("stage", choices=["download", "build", "validate", "validate_resid", "freeze", "final", "final_resid",
-                                     "test", "report"])
+    p.add_argument("stage", choices=["download", "build", "validate", "validate_resid", "validate_classical", "freeze", "final",
+                                     "final_resid", "test", "report", "compat", "haircut"])
     p.add_argument("--force", action="store_true", help="test stage: allow a second (logged) test run")
     p.add_argument("--only", default=None, help="validate/final(_resid): comma-separated generators to (re)train")
     a = p.parse_args(argv)
@@ -50,9 +52,18 @@ def main(argv=None) -> None:
     elif a.stage == "test":
         from dh import pipeline
         pipeline.test(force=a.force)
+    elif a.stage == "validate_classical":
+        from dh import pipeline
+        pipeline.validate_classical()
     elif a.stage == "report":
         from dh import report
         report.run()
+    elif a.stage == "compat":
+        from dh import checks
+        checks.compat()
+    elif a.stage == "haircut":
+        from dh import checks
+        checks.haircut()
 
 
 if __name__ == "__main__":

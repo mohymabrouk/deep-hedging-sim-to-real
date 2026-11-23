@@ -1,6 +1,7 @@
 """Protocol stages: validate (fit <= 2020, choose alpha on 2021 options), final (refit <= 2021, retrain),
 test (score 2022 -> latest once, logged). The residual hedgers (added for test run 3) have their own
-validate_resid and final_resid stages; freeze and test cover both families."""
+validate_resid and final_resid stages, and the classical hedgers (added for test run 4) a validate_classical stage;
+freeze and test cover every family."""
 
 import hashlib
 import json
@@ -12,9 +13,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from dh import config, dataset, evaluate, market
+from dh import classical, config, dataset, evaluate, market
 from dh.diffusion import Diffusion, make_windows
-from dh.hedging import BSDelta, DeepHedger, NoHedge, ResidualHedger, returns_to_prices, train_policy
+from dh.hedging import (BSDelta, DeepHedger, MVDelta, NoHedge, ResidualHedger, SmileDelta, WWBand, returns_to_prices,
+                        train_policy)
 from dh.sims import Bootstrap, Garch, RoughVol, martingale, realism_stats
 
 log = logging.getLogger(__name__)
@@ -135,16 +137,41 @@ def selected_residual() -> dict[str, dict]:
             if (config.RESULTS / "validation" / f"dh_resid_{name}.csv").exists()}
 
 
+def selected_classical() -> dict:
+    """Classical hedgers (test run 4): WW risk aversion with the lowest validation CVaR95 loss, the Hull-White (a, b, c)
+    fitted on 2021, and whether the smile-implied delta passed its reliability check. {} before validate_classical."""
+    vdir = config.RESULTS / "validation"
+    files = [vdir / "ww_band.csv", vdir / "mv_delta_fit.json", vdir / "smile_slope_reliability.json"]
+    if not all(p.exists() for p in files):
+        return {}
+    ww = pd.read_csv(files[0])
+    fit = json.loads(files[1].read_text())
+    rel = json.loads(files[2].read_text())
+    return {"ww_band": {"risk_aversion": float(ww.loc[ww["cvar95_loss"].idxmin(), "risk_aversion"])},
+            "mv_delta": {k: float(fit[k]) for k in ("a", "b", "c")}, "smile_delta": {"kept": bool(rel["kept"])}}
+
+
+def classical_hedgers(sel: dict) -> dict:
+    if not sel:
+        return {}
+    out = {"ww_band": WWBand(sel["ww_band"]["risk_aversion"]), "mv_delta": MVDelta(**sel["mv_delta"])}
+    if sel["smile_delta"]["kept"]:
+        out["smile_delta"] = SmileDelta()
+    return out
+
+
 def selected_alphas() -> dict[str, float]:
     out = {name: _alpha_for(name) for name in config.GENERATORS}
     _json(config.RESULTS / "selected_hyperparameters.json",
-          {"criterion": "lowest validation CVaR95 loss (1x fees)", "alpha": out, "residual": selected_residual()})
+          {"criterion": "lowest validation CVaR95 loss (1x fees)", "alpha": out, "residual": selected_residual(),
+           "classical": selected_classical()})
     return out
 
 
 def _frozen_cfg() -> tuple[dict, str]:
     """Every constant + the choices made on validation, and its hash (computed the same way in freeze and test)."""
-    cfg = {**config.as_dict(), "selected_alpha": selected_alphas(), "selected_residual": selected_residual()}
+    cfg = {**config.as_dict(), "selected_alpha": selected_alphas(), "selected_residual": selected_residual(),
+           "selected_classical": selected_classical()}
     return cfg, hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
@@ -158,15 +185,27 @@ def freeze() -> dict:
            for g in config.GENERATORS}
     val_resid = {g: pd.read_csv(config.RESULTS / "validation" / f"dh_resid_{g}.csv")[
         ["stage", "stand_in", "bound", "alpha", "mean_pnl", "std_loss", "cvar95_loss"]].to_dict("records") for g in config.GENERATORS}
+    vdir = config.RESULTS / "validation"
+    if not cfg["selected_classical"]:
+        raise SystemExit("classical validation missing: run validate_classical first")
+    val_classical = {"ww_band_grid": pd.read_csv(vdir / "ww_band.csv")[["risk_aversion", "mean_pnl", "std_loss", "cvar95_loss", "turnover"]].to_dict("records"),
+                     "scores": pd.read_csv(vdir / "classical.csv")[["hedger", "mean_pnl", "std_loss", "cvar95_loss", "turnover"]].to_dict("records"),
+                     "mv_delta_fit": json.loads((vdir / "mv_delta_fit.json").read_text()),
+                     "smile_slope_reliability": json.loads((vdir / "smile_slope_reliability.json").read_text())}
     frozen = {"frozen_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "rule": "per world, the CVaR level alpha with the lowest CVaR95 loss on the 2021 validation options (1x fees)",
               "rule_residual": "per world, the (sigma_entry stand-in, bound c, alpha) with the lowest CVaR95 loss on the 2021 "
                                "validation options (1x fees); stage 1: every stand-in x bound at alpha = RESID_STAGE1_ALPHA, "
                                "stage 2: the stage-1 winner at the other ALPHAS",
+              "rule_classical": "ww_band: the risk aversion in WW_RISK_AVERSIONS with the lowest CVaR95 loss on the 2021 validation "
+                                "options (1x fees); mv_delta: Hull-White OLS on 2021 daily Deribit mark-price changes; smile_delta: "
+                                "kept only if its 2021 slope coverage and split-half agreement pass (PLAN.md change 17)",
               "config_hash": cfg_hash, "selected_alpha": cfg["selected_alpha"], "selected_residual": cfg["selected_residual"],
-              "validation_scores": val, "validation_scores_residual": val_resid, "config": cfg}
+              "selected_classical": cfg["selected_classical"], "validation_scores": val, "validation_scores_residual": val_resid,
+              "validation_classical": val_classical, "config": cfg}
     _json(config.RESULTS / "frozen_config.json", frozen)
-    log.info("frozen config %s: %s, residual %s", cfg_hash, cfg["selected_alpha"], cfg["selected_residual"])
+    log.info("frozen config %s: %s, residual %s, classical %s", cfg_hash, cfg["selected_alpha"], cfg["selected_residual"],
+             cfg["selected_classical"])
     return frozen
 
 
@@ -257,6 +296,56 @@ def final_resid(only: list[str] | None = None) -> None:
         log.info("final residual policy %s %s trained in %ds (objective %.3f)", name, ch, secs, hist[-1])
 
 
+# ---------------------------------------------------------------------------------------------------
+# classical hedgers (test run 4)
+# ---------------------------------------------------------------------------------------------------
+def attach_smile_slopes(df: pd.DataFrame, c) -> np.ndarray:
+    """theta at entry for every option (NaN where it cannot be estimated -> 0, i.e. BS delta); sets c.smile_slope."""
+    theta = classical.entry_slopes(df)
+    c.smile_slope = torch.as_tensor(np.nan_to_num(theta, nan=0.0), dtype=torch.float64)
+    return theta
+
+
+def validate_classical() -> None:
+    """2021 only: Hull-White regression, smile-slope reliability, WW risk-aversion grid, validation scores."""
+    opts = dataset.load_options("validation")
+    df, mkt, F, c = dataset.market_arrays(opts)
+    vdir = config.RESULTS / "validation"
+    log.info("validation options: %d (%s -> %s)", len(df), df["entry_day"].min(), df["expiry"].max())
+    # 1. Hull & White (2017) on daily changes of 2021 Deribit mark prices (both days in 2021)
+    obs = classical.hw_observations(config.VAL_START, config.VAL_END)
+    fit = classical.hw_fit(obs)
+    _json(vdir / "mv_delta_fit.json", fit)
+    log.info("Hull-White fit on 2021: %s", fit)
+    # 2. smile slope at entry and its split-half reliability
+    full = attach_smile_slopes(df, c)
+    h1, h2 = classical.entry_slopes(df, half=1), classical.entry_slopes(df, half=2)
+    rel = classical.slope_reliability(full, h1, h2)
+    _json(vdir / "smile_slope_reliability.json", rel)
+    pd.DataFrame({"instrument": df["instrument"], "entry_day": df["entry_day"], "expiry": df["expiry"],
+                  "log_moneyness": df["log_moneyness"], "theta": full, "theta_0700_0730": h1, "theta_0730_0800": h2}
+                 ).to_csv(vdir / "smile_slopes.csv", index=False)
+    log.info("smile slope reliability: %s", rel)
+    # 3. Whalley-Wilmott risk-aversion grid (the only choice made from validation P&L)
+    rows = []
+    for g in config.WW_RISK_AVERSIONS:
+        t = evaluate.pnl_table(df, mkt, F, c, evaluate.positions({"ww_band": WWBand(g)}, mkt, c))
+        s = evaluate.summarize(t).iloc[0].to_dict()
+        s["risk_aversion"] = g
+        rows.append(s)
+        log.info("validation ww_band gamma=%g: mean loss %.3f, std %.3f, CVaR95 %.3f, turnover %.3f", g, s["mean_loss"],
+                 s["std_loss"], s["cvar95_loss"], s["turnover"])
+    pd.DataFrame(rows).to_csv(vdir / "ww_band.csv", index=False)
+    # 4. validation scores of the three chosen hedgers (smile_delta scored even if dropped, for the record)
+    sel = selected_classical()
+    hed = {"bs_iv": BSDelta(use_dvol=False), **classical_hedgers(sel)}
+    hed.setdefault("smile_delta", SmileDelta())
+    t = evaluate.pnl_table(df, mkt, F, c, evaluate.positions(hed, mkt, c))
+    perf = evaluate.summarize(t).merge(evaluate.paired_vs(t), on="hedger", suffixes=("", "_pair"))
+    perf.to_csv(vdir / "classical.csv", index=False)
+    log.info("classical hedgers on validation (choice %s):\n%s", sel, perf.to_string())
+
+
 def load_resid(name: str, stage: str = "final") -> ResidualHedger:
     sd = torch.load(config.MODELS / stage / f"dh_resid_{name}.pt")
     pol = ResidualHedger(float(sd["bound"]))
@@ -287,6 +376,7 @@ def score(split: str, hedgers: dict, out_dir, prefix: str) -> tuple[pd.DataFrame
     opts = dataset.load_options(split)
     df, mkt, F, c = dataset.market_arrays(opts)
     log.info("%s options: %d (%s -> %s)", split, len(df), df["entry_day"].min(), df["expiry"].max())
+    theta = attach_smile_slopes(df, c) if "smile_delta" in hedgers else None
     pos = evaluate.positions(hedgers, mkt, c)
     tables = {m: evaluate.pnl_table(df, mkt, F, c, pos, fee_mult=m) for m in config.FEE_MULTIPLIERS}
     t = tables[1.0]
@@ -312,6 +402,8 @@ def score(split: str, hedgers: dict, out_dir, prefix: str) -> tuple[pd.DataFrame
     qs["log_moneyness"] = df["log_moneyness"].to_numpy()
     qs["is_call"] = df["is_call"].to_numpy()
     qs["T"] = df["T"].to_numpy()
+    if theta is not None:
+        qs["smile_slope"] = theta  # NaN = not estimable at entry (the smile-implied delta is then BS delta)
     qs.to_csv(out_dir / f"{prefix}_entry_hedge_ratios.csv", index=False)
     return df, perf
 
@@ -336,6 +428,7 @@ def test(force: bool = False) -> None:
         hedgers[f"dh_{name}"] = pol
     for name in config.GENERATORS:
         hedgers[f"dh_resid_{name}"] = load_resid(name)
+    hedgers.update(classical_hedgers(cfg["selected_classical"]))
     _json(config.RESULTS / "test_config.json", cfg)
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps({"event": "start", "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -344,7 +437,8 @@ def test(force: bool = False) -> None:
     entry = {"event": "done", "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "config_hash": cfg_hash,
              "code_hash": _code_hash(), "forced_rerun": bool(previous), "n_options": int(len(df)), "n_expiries": int(df["expiry"].nunique()),
              "first_entry": str(df["entry_day"].min()), "last_expiry": str(df["expiry"].max()), "selected_alpha": alphas,
-             "selected_residual": cfg["selected_residual"], "hedgers": list(hedgers), "seconds": round(time.time() - t_start)}
+             "selected_residual": cfg["selected_residual"], "selected_classical": cfg["selected_classical"],
+             "hedgers": list(hedgers), "seconds": round(time.time() - t_start)}
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
     log.info("test logged: %s", entry)
