@@ -81,8 +81,21 @@ RESID_TRAIL_WINDOW = 20  # days of returns before entry for the "trailing" stand
 RESID_BOUNDS = (0.1, 0.3)  # correction bound c (BTC per option)
 RESID_STAGE1_ALPHA = 0.9  # validation stage 1: stand-in x bound at this CVaR level; stage 2: the other ALPHAS
 
+# ---- classical hedgers (added for test run 4; pre-declared in PLAN.md, change 17, before any validation run) ----
+CLASSICAL = ("ww_band", "mv_delta", "smile_delta")
+WW_RISK_AVERSIONS = (1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0)  # Whalley-Wilmott gamma grid, per unit of S0
+HW_DAYS_TO_EXPIRY = (2, 35)  # Hull-White regression: days to expiry on day d (so still alive on day d + 1)
+HW_MAX_ABS_LOG_MONEYNESS = 0.2
+HW_CALL_DELTA_RANGE = (0.05, 0.95)
+SMILE_MAX_ABS_M = 0.35  # strikes used in the smile fit at entry: |log(K/S)| <= this
+SMILE_MIN_STRIKES = 4
+SMILE_SLOPE_CLIP = 2.0  # cap on |d sigma / d log(K/S)| (IV as a fraction)
+SMILE_KEEP_MIN_COVERAGE = 0.5  # keep the smile-implied delta only if >= 50% of validation options get a slope ...
+SMILE_KEEP_MIN_SPLIT_CORR = 0.5  # ... and the two half-hour estimates agree (Pearson >= 0.5) ...
+SMILE_KEEP_MIN_PAIRS = 200  # ... on at least 200 validation options
+
 HEDGERS = (("no_hedge", "bs_iv", "bs_dvol") + tuple(f"dh_{g}" for g in GENERATORS)
-           + tuple(f"dh_resid_{g}" for g in GENERATORS))
+           + tuple(f"dh_resid_{g}" for g in GENERATORS) + CLASSICAL)
 
 
 def as_dict() -> dict:

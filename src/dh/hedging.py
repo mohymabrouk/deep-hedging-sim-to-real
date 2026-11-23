@@ -27,17 +27,19 @@ TMAX = config.MAX_DAYS
 class Contracts:
     """Per-option static data, all torch tensors of shape [N]."""
 
-    def __init__(self, K, T, is_call, iv0=None, dvol0=None):
+    def __init__(self, K, T, is_call, iv0=None, dvol0=None, smile_slope=None):
         self.K = torch.as_tensor(np.array(K, dtype=np.float64) if not torch.is_tensor(K) else K, dtype=torch.float64)
         self.T = torch.as_tensor(np.array(T, dtype=np.int64) if not torch.is_tensor(T) else T, dtype=torch.int64)
         self.is_call = torch.as_tensor(np.array(is_call, dtype=bool) if not torch.is_tensor(is_call) else is_call, dtype=torch.bool)
         n = len(self.K)
         self.iv0 = torch.as_tensor(iv0 if iv0 is not None else np.full(n, np.nan), dtype=torch.float64)
         self.dvol0 = torch.as_tensor(dvol0 if dvol0 is not None else np.full(n, np.nan), dtype=torch.float64)
+        # d sigma / d log(K/S) at entry, for the smile-implied delta (test run 4); 0 = no smile information
+        self.smile_slope = torch.as_tensor(smile_slope if smile_slope is not None else np.zeros(n), dtype=torch.float64)
 
     def subset(self, idx):
         c = Contracts.__new__(Contracts)
-        for k in ("K", "T", "is_call", "iv0", "dvol0"):
+        for k in ("K", "T", "is_call", "iv0", "dvol0", "smile_slope"):
             setattr(c, k, getattr(self, k)[idx])
         return c
 
@@ -201,6 +203,74 @@ class ResidualHedger(nn.Module):
         x = residual_features(view, t, q_prev, c, delta)
         q = delta + self.bound * torch.tanh(self(x)).to(torch.float64)
         return torch.where(c.is_call, torch.clamp(q, 0.0, 1.0), torch.clamp(q, -1.0, 0.0))
+
+
+# ---------------------------------------------------------------------------------------------------
+# classical hedgers (added for test run 4; pre-declared in PLAN.md, change 17). All use the entry IV, like BSDelta.
+# ---------------------------------------------------------------------------------------------------
+def bs_greeks(S, K, tau, sigma, is_call) -> dict:
+    """BS delta (same formula and clamps as `bs_delta`, so it is bit-identical), call delta, gamma per unit of S and
+    phi(d1), r = 0. vega / S = phi(d1) sqrt(tau)."""
+    tau = torch.clamp(tau, min=1e-6)
+    sigma = torch.clamp(sigma, min=1e-4)
+    d1 = (torch.log(S / K) + 0.5 * sigma**2 * tau) / (sigma * torch.sqrt(tau))
+    nd1 = torch.special.ndtr(d1)
+    pdf = torch.exp(-0.5 * d1**2) / math.sqrt(2.0 * math.pi)
+    return {"delta": torch.where(is_call, nd1, nd1 - 1.0), "call_delta": nd1, "pdf_d1": pdf,
+            "gamma": pdf / (S * sigma * torch.sqrt(tau)), "tau": tau}
+
+
+def _entry_iv_greeks(view, t, c):
+    """Greeks at the rebalancing time t with the entry IV, the way BSDelta(use_dvol=False) computes its delta."""
+    S = view["P"][:, -1]
+    tau = torch.clamp((c.T - t).to(torch.float64), min=1e-9) / config.DAYS_PER_YEAR
+    return S, bs_greeks(S, c.K, tau, c.iv0.clone(), c.is_call)
+
+
+class WWBand:
+    """Whalley & Wilmott (1997) no-trade band around BS delta at the entry IV. Half-width
+    H = (3 kappa S Gamma^2 / (2 gamma))^(1/3); prices are in units of S0, so gamma is a risk aversion per unit of S0.
+    Hold the position while it is inside [delta - H, delta + H], else trade to the nearest edge; q_{-1} = 0.
+    gamma = inf closes the band, and the hedger is then BS delta at the entry IV."""
+
+    def __init__(self, risk_aversion: float, cost: float = config.PERP_TAKER_FEE):
+        self.risk_aversion = float(risk_aversion)
+        self.cost = float(cost)
+
+    def half_width(self, S, gamma):
+        return (1.5 * self.cost * S * gamma**2 / self.risk_aversion) ** (1.0 / 3.0)
+
+    def act(self, view, t, q_prev, c):
+        S, g = _entry_iv_greeks(view, t, c)
+        h = self.half_width(S, g["gamma"])
+        return torch.minimum(torch.maximum(q_prev, g["delta"] - h), g["delta"] + h)
+
+
+class MVDelta:
+    """Hull & White (2017) minimum-variance delta at the entry IV:
+    delta_BS + vega / (S sqrt(T)) (a + b delta_C + c delta_C^2) = delta_BS + phi(d1) (a + b delta_C + c delta_C^2),
+    delta_C = call delta (put delta + 1), so one (a, b, c) serves calls and puts (put-call parity)."""
+
+    def __init__(self, a: float, b: float, c: float):
+        self.a, self.b, self.c = float(a), float(b), float(c)
+
+    def adjustment(self, g):
+        dc = g["call_delta"]
+        return g["pdf_d1"] * (self.a + self.b * dc + self.c * dc**2)
+
+    def act(self, view, t, q_prev, c):
+        _, g = _entry_iv_greeks(view, t, c)
+        return g["delta"] + self.adjustment(g)
+
+
+class SmileDelta:
+    """Smile-implied delta (Alexander & Imeraj 2023): the model-free delta of scale-invariant models (Alexander &
+    Nogueira 2007), equal to the sticky-moneyness delta: delta_BS - (vega / S) theta = delta_BS - phi(d1) sqrt(tau) theta.
+    theta = d sigma / d log(K/S) is estimated at entry (c.smile_slope); it and the entry IV stay fixed."""
+
+    def act(self, view, t, q_prev, c):
+        _, g = _entry_iv_greeks(view, t, c)
+        return g["delta"] - g["pdf_d1"] * torch.sqrt(g["tau"]) * c.smile_slope
 
 
 def entry_vol_stand_in(P: torch.Tensor, T: torch.Tensor, kind: str, g: torch.Generator | None = None,
