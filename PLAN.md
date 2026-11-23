@@ -283,9 +283,120 @@ commands), `results/*.csv`, figures, `results/test_log.jsonl`, passing tests.
      - The three benchmarks reproduce run 2 bit for bit.
      - The four original deep hedgers differ by at most 1.7e-10 (% of S0) in any summary statistic, 6.8e-10 in the
        split and fee tables, and 7.2e-7 in any single option's P&L. This is float32 rounding under a different
-       thread count (`results/reproduction_vs_run2.csv`).
+       thread count (`results/reproduction_vs_run2.csv`, moved to `results/run3_official/` in change 18).
    - **Edits after the test.**
      - `report.py` got shorter titles for the hedge-ratio figure (one was clipped). It is text only, so the code hash
        is now `288cd6ea965c52a0`, against `6ebba392e2e4b00e` logged by the test.
      - The README's run-2 value 3.69 for BS-DVOL in 2022-23 was a rounding slip (3.685); it now reads 3.68.
    - **Tests.** 30 tests: 21 old and 9 in `tests/test_residual.py`.
+17. **Compatibility check, three classical hedgers and test run 4: pre-declared on 2026-11-23 at 11:15 UTC, before any
+   of the computations below was run.**
+   - **A. Compatibility check (no new test run, no retraining).**
+     - **Definition taken from the paper.** arXiv 2608.20842 defines the compatibility gap as
+       Gamma = sup over h in a strategy class of |rho_P(h) - rho_Q(h)|. It is the difference in hedging risk of the same
+       strategies between the real law P and a synthetic law Q, in absolute value and not normalised; rho is CVaR95 in
+       its experiments. Its loss is C = payoff - trading gains + proportional costs, with no premium.
+     - **Real environment:** the 1,388 validation options of 2021, with real perp prices at 08:00 UTC and the payoff at
+       the delivery price.
+     - **Synthetic environment of world g:** the 20,000 cached final-stage paths of g. They are fitted on data <= 2021
+       and are the paths the frozen policies were trained on. Path j hedges validation contract j mod 1,388 (same K/S0,
+       days to expiry and call/put), so both environments hedge the same contracts.
+     - **Loss on both sides:** C = payoff - sum_t q_t (P_{t+1} - P_t) + 0.05% x sum_t P_t |q_t - q_{t-1}|, in % of S0.
+       No premium, option fee or funding, since synthetic paths have none.
+     - **Fixed strategies, all frozen:**
+       1. `bs_trailing`: BS delta with sigma = the realised vol of the 20 daily returns before entry, computed the same
+          way in both environments. The worlds have no IV, so BS delta at the entry IV cannot run on them.
+       2. The world's original policy `dh_<g>`.
+       3. The world's residual policy `dh_resid_<g>`. Its sigma_entry is its chosen stand-in on synthetic paths and the
+          entry IV on real options, as in training and test.
+     - **Gap:** G_rho(g, h) = rho on world g's synthetic episodes minus rho on the real 2021 options, for rho in
+       {CVaR95, std of loss}. The predictors use |G|: smaller means more compatible, so a better predicted test result.
+     - **Compatibility predictors per hedger:**
+       - (ii-a, primary) |G_CVaR95| of the hedger's own policy;
+       - (ii-b) |G_std| of its own policy;
+       - (ii-c) |G_CVaR95| of `bs_trailing` in its world;
+       - (ii-d) the largest |G_CVaR95| over the three strategies of its world, a crude stand-in for the sup.
+     - **Realism predictors** from `results/realism.csv` (worlds fitted on data <= 2021 vs real daily returns from 2022):
+       - (i-a, primary) W1 on standardised returns;
+       - (i-b) W1 on raw returns;
+       - distance to the real value of (i-c) excess kurtosis, (i-d) mean ACF of |r|, (i-e) leverage, (i-f) annual vol;
+       - (i-g) |q01 ratio - 1| + |q99 ratio - 1|;
+       - (i-h) the mean rank over i-a to i-g.
+     - **Reference predictor:** (iii) the hedger's validation CVaR95 on the 2021 options, the number the project selected on.
+     - **Target and statistic.**
+       - Target: the run-3 test CVaR95 loss of each deep hedger. The std of loss is a secondary target.
+       - Statistic: the Spearman rank correlation between predictor and target; positive means it ranks correctly.
+       - Groups: the original family (n = 4), the residual family (n = 4) and both together (n = 8, with realism ties
+         within a world). One-sided exact permutation p-values.
+       - With n = 4 only a perfect ranking reaches p = 1/24 = 0.042. This is a descriptive check; it cannot establish
+         either claim.
+   - **B. Three classical hedgers, then one forced test run 4.**
+     - **Common to all three:** sigma = entry IV, r = 0, daily 08:00 rebalancing, and the same accounting as every
+       other hedger. Each has at most 3 parameters, fitted on 2021 data only.
+     - **1. `ww_band`: Whalley & Wilmott (1997) no-trade band around BS delta.**
+       - Delta_t and Gamma_t are the BS delta and gamma at the entry IV. The half-width is
+         H_t = (3 kappa S_t Gamma_t^2 / (2 gamma))^(1/3), with kappa = 0.05% (the perp taker fee) and prices in units of S0.
+       - Rule: q_t = clip(q_{t-1}, Delta_t - H_t, Delta_t + H_t), q_{-1} = 0. The hedger holds while inside the band and
+         otherwise trades to the nearest edge.
+       - One parameter, the risk aversion gamma (per unit of S0). It is chosen on the 2021 validation options from
+         {1, 3, 10, 30, 100, 300, 1000, 3000} by the lowest CVaR95 loss at 1x fees, the project's rule. As gamma goes to
+         infinity the band closes and the hedger is BS delta.
+       - For comparison, arXiv 2608.29025 set its risk aversion to 60 "by inspection", for hourly hedging.
+     - **2. `mv_delta`: Hull & White (2017) minimum-variance delta.**
+       - delta_MV = delta_BS + vega_BS / (S sqrt(T)) x (a + b delta_C + c delta_C^2)
+         = delta_BS + phi(d1) (a + b delta_C + c delta_C^2), where delta_C is the call delta (= put delta + 1).
+       - Under put-call parity a put and a call of the same strike have the same hedging residual, so one (a, b, c)
+         serves both.
+       - **Fit: Hull & White's own regression.** OLS without intercept of (Δf - delta_BS ΔS)/S on
+         phi(d1) (ΔS/S) [1, delta_C, delta_C^2], on daily changes taken from P1's cached Deribit trades:
+         - an observation is an instrument with trades in 07:00-08:00 UTC on two consecutive days d and d+1, both in 2021;
+         - f = the mark price (BTC) of its last trade in the window x the index price of that trade, S = that index
+           price, and sigma = the IV of that trade on day d;
+         - filters on day d: 2 to 35 days to expiry, |log(K/S)| < 0.2, mark price >= 0.0005 BTC, IV in 5-300%, and
+           0.05 <= delta_C <= 0.95.
+       - **Deviation from Hull & White:** they used end-of-day mid quotes of S&P 500 options over rolling 36-month
+         windows. Here there is one fit on 2021, with Deribit mark prices once a day.
+       - Reported: a, b, c, n and their in-sample gain 1 - SSE(MV)/SSE(BS). Nothing is selected on validation CVaR.
+     - **3. `smile_delta`: the smile-implied delta of Alexander & Imeraj (2023).**
+       - **Variant.** The one their abstract reports gains for (above 30% for OTM puts hedged with the perpetual): the
+         model-free delta of scale-invariant models (Alexander & Nogueira 2007), which equals the sticky-moneyness delta:
+         delta_SI = delta_BS - (vega_BS / S) theta = delta_BS - phi(d1) sqrt(tau) theta, where theta = d sigma / d log(K/S)
+         at the option's entry moneyness.
+       - **Source caveat.** The full text was not reachable (publisher and repository pages refused automated access), so
+         the variant is identified from the abstract and secondary sources.
+       - **What is fixed.** sigma (the entry IV) and theta are fixed at entry, as BS delta keeps its IV fixed.
+       - **theta from same-expiry trades at entry.** For the entry day and the option's expiry, take one point per strike
+         traded in 07:00-08:00 UTC (the window that ends at the first hedge): the median trade IV and
+         m = log(K / median index price). Then:
+         - keep |m| <= 0.35 and fit the OLS quadratic sigma = alpha + beta m + kappa m^2;
+         - theta = beta + 2 kappa m_i, clipped to [-2, 2];
+         - this needs at least 4 strikes and m_i inside [min m, max m]; otherwise theta = 0 (BS delta).
+         - There are zero free parameters.
+       - **Reliability, on the 2021 validation options only:**
+         - coverage = the share of validation options with a theta;
+         - split-half agreement = the Pearson correlation between theta from the 07:00-07:30 trades and theta from the
+           07:30-08:00 trades (same rules, at least 200 options with both).
+         - **`smile_delta` is kept only if coverage >= 50% and the split-half correlation >= 0.5.** Otherwise it is
+           dropped from run 4, and the README says why.
+     - **Then, in order:**
+       1. Validation scores of the three hedgers on the 2021 options. Only gamma is chosen from them.
+       2. Freeze a new config hash.
+       3. Archive run 3 in `results/run3_official/`.
+       4. One forced test run 4 of all hedgers, logged.
+       5. Check that the 11 existing hedgers reproduce run 3 up to floating-point noise.
+     - **Reporting.**
+       - For each new hedger: CVaR95, std of loss, mean loss, turnover and fees.
+       - Its paired Δ vs BS delta at the entry IV, with the existing block bootstrap (blocks of 4 expiries,
+         2,000 resamples).
+       - Its paired Δ vs the best deep hedger of the run (the lowest test CVaR95 of the 8). That pick is post hoc and is
+         disclosed as such.
+       - If a classical hedger's Δ CVaR95 vs BS delta has a 95% interval above zero, that becomes the README headline. If
+         not, the README says so.
+   - **C. Descriptive check of arXiv 2605.21696.** The paper says deep hedgers learn a delta haircut explained by spot-IV
+     co-movement. It is checked on the run-4 test entries, for each residual hedger:
+     - the entry correction q0 - q0(BS delta, entry IV) against the MV adjustment q0(mv_delta) - q0(BS delta, entry IV);
+     - Pearson and Spearman correlation, the share of options with the same sign, and the OLS of correction on adjustment
+       (intercept, slope, R^2);
+     - the haircut itself: the share of options with |q0| < |BS delta|, and the mean correction for calls and for puts.
+     - The original deep hedgers' deviation from BS delta is reported the same way, as a supplement.
+     - Descriptive only; nothing is chosen from it.
