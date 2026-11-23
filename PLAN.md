@@ -400,3 +400,59 @@ commands), `results/*.csv`, figures, `results/test_log.jsonl`, passing tests.
      - the haircut itself: the share of options with |q0| < |BS delta|, and the mean correction for calls and for puts.
      - The original deep hedgers' deviation from BS delta is reported the same way, as a supplement.
      - Descriptive only; nothing is chosen from it.
+18. **Run 4 done, 2026-11-23.**
+   - **Order of work.**
+     1. Change 17 was written first (`results/validation/run4_predeclared.json`).
+     2. Run 3 was archived: its outputs were copied to `results/run3_official/`, and `reproduction_vs_run2.csv` was
+        moved there.
+     3. The compatibility check (A) ran.
+     4. `validate_classical` ran.
+     5. A dry run of scoring and report on the 2021 validation options, in a scratch copy of `results/`, checked the
+        code path before the freeze. No test data was touched.
+     6. `scripts/run4_classical_chain.sh` ran validation again (same output), the freeze, the forced test, the haircut
+        check and the report.
+   - **A. Compatibility check** (`results/compatibility_*.csv`).
+     - The CVaR95 gaps (synthetic minus real 2021) were large for GARCH-t (+3.4 to +4.3) and rough vol (+1.9 to +2.3),
+       and small for bootstrap (-0.3 to +0.5) and diffusion (-0.8 to +1.4).
+     - The primary compatibility predictor (own-policy |gap CVaR95|) ranks the hedgers the wrong way. Its Spearman
+       correlation with the run-3 test CVaR95 is -0.60 (original, n = 4), -0.80 (residual, n = 4) and -0.24 (all 8).
+     - The primary realism predictor (W1 on standardised returns) gives +0.80, +0.40 and +0.29, none significant.
+     - The reference, the 2021 validation CVaR95, gives +0.60, +0.60 and +0.62 (one-sided p = 0.057 for n = 8).
+     - The check does not support the paper's claim on P1's data, and at n = 4 to 8 it cannot refute it.
+   - **B. Validation choices** (2021 only):
+     - Whalley-Wilmott: gamma = 1000 (validation CVaR95 6.56 against BS delta's 6.63).
+     - Hull-White: a = -0.185, b = 0.407, c = -0.185 on 5,293 daily changes, in-sample gain 1.1%.
+     - Smile slope: coverage 93.5%, split-half Pearson 0.94 on 784 options, so `smile_delta` was kept.
+     - On validation the minimum-variance and smile-implied deltas were already significantly worse than BS delta
+       (Δ CVaR95 -0.28 and -0.37). They were run anyway, as declared.
+     - Implementation detail not spelled out in change 17: individual trades with an IV outside 5-300% (the option
+       filter) are left out of the smile fit.
+   - **Freeze and test.** The config was frozen at 11:27:44 UTC with hash `22c21a25ad4237ee`. Test run 4 was logged at
+     11:27:51 UTC (start) and 11:29:10 (done) as `forced_rerun: true`, with code hash `3d52eb1e962f1310`. The code was
+     not changed after the test.
+   - **Result: no classical baseline beats BS delta; all three are significantly worse in CVaR95.** CVaR95 loss vs BS
+     delta's 3.64, with the change and its 95% interval:
+     - Whalley-Wilmott band: 3.78, -0.14 [-0.25, -0.01];
+     - minimum-variance delta: 3.82, -0.18 [-0.22, -0.12];
+     - smile-implied delta: 3.81, -0.17 [-0.31, -0.05].
+   - **Beyond the headline.**
+     - The band trades 14% less (turnover 1.40 against 1.63) and saves 0.011% of S0 in perp fees, with no change in
+       mean loss. But its std of loss is 0.06 higher, and it is worse at fee multipliers 0, 1 and 2.
+     - Against the best deep hedger of the run (the residual rough-vol hedger, a post-hoc pick), no classical hedger
+       differs significantly in CVaR95. All three have a std of loss 0.21-0.27 lower.
+     - No hedger is significantly better than BS delta in any split.
+   - **C. Haircut check** (`results/haircut_check.csv`).
+     - The Hull-White adjustment at entry is a small haircut on calls (mean -0.018) and about zero on puts.
+     - The GARCH-t and rough-vol residual hedgers move the opposite way: Pearson -0.91 and -0.94 with the adjustment,
+       mean call correction +0.070 and +0.051.
+     - Only the diffusion residual hedger haircuts broadly (85% of calls, 97% of puts), and its correction is almost
+       unrelated to the adjustment (R^2 0.03).
+     - The pattern of arXiv 2605.21696 is not seen. P1's worlds have no IV, so this is not a test of the paper.
+   - **Reproduction.** All 11 hedgers of run 3 reproduce it bit for bit: the largest difference is 0 in every summary
+     statistic and in every option's P&L (`results/reproduction_vs_run3.csv`). Same policy files, same thread count.
+   - **Code and tests.**
+     - New: `classical.py`, `checks.py`, `tests/test_classical.py` (17 tests), `tests/test_reproduction.py` (1 test) and
+       `scripts/run4_classical_chain.sh`.
+     - Extended: the hedger classes in `hedging.py` (`Contracts.smile_slope` defaults to 0), the stages in
+       `pipeline.py` and `cli.py`, and `report.py`. The tables now also show Δ std of loss with its interval.
+     - 48 tests pass. No dependency changed.
