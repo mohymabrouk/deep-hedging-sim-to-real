@@ -81,6 +81,36 @@
   0.3
  ],
  "RESID_STAGE1_ALPHA": 0.9,
+ "CLASSICAL": [
+  "ww_band",
+  "mv_delta",
+  "smile_delta"
+ ],
+ "WW_RISK_AVERSIONS": [
+  1.0,
+  3.0,
+  10.0,
+  30.0,
+  100.0,
+  300.0,
+  1000.0,
+  3000.0
+ ],
+ "HW_DAYS_TO_EXPIRY": [
+  2,
+  35
+ ],
+ "HW_MAX_ABS_LOG_MONEYNESS": 0.2,
+ "HW_CALL_DELTA_RANGE": [
+  0.05,
+  0.95
+ ],
+ "SMILE_MAX_ABS_M": 0.35,
+ "SMILE_MIN_STRIKES": 4,
+ "SMILE_SLOPE_CLIP": 2.0,
+ "SMILE_KEEP_MIN_COVERAGE": 0.5,
+ "SMILE_KEEP_MIN_SPLIT_CORR": 0.5,
+ "SMILE_KEEP_MIN_PAIRS": 200,
  "HEDGERS": [
   "no_hedge",
   "bs_iv",
@@ -92,7 +122,10 @@
   "dh_resid_bootstrap",
   "dh_resid_garch",
   "dh_resid_rough",
-  "dh_resid_diffusion"
+  "dh_resid_diffusion",
+  "ww_band",
+  "mv_delta",
+  "smile_delta"
  ],
  "selected_alpha": {
   "bootstrap": 0.99,
@@ -120,6 +153,19 @@
    "stand_in": "fwd_noisy",
    "bound": 0.1,
    "alpha": 0.99
+  }
+ },
+ "selected_classical": {
+  "ww_band": {
+   "risk_aversion": 1000.0
+  },
+  "mv_delta": {
+   "a": -0.1851779954105877,
+   "b": 0.4074059354904006,
+   "c": -0.18458333269325752
+  },
+  "smile_delta": {
+   "kept": true
   }
  }
 }

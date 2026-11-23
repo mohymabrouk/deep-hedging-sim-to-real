@@ -1,0 +1,12 @@
+hedger,n_options,same_options,max_abs_diff_summary,max_abs_diff_option_pnl
+no_hedge,9527,True,0.0,0.0
+bs_iv,9527,True,0.0,0.0
+bs_dvol,9527,True,0.0,0.0
+dh_bootstrap,9527,True,0.0,0.0
+dh_garch,9527,True,0.0,0.0
+dh_rough,9527,True,0.0,0.0
+dh_diffusion,9527,True,0.0,0.0
+dh_resid_bootstrap,9527,True,0.0,0.0
+dh_resid_garch,9527,True,0.0,0.0
+dh_resid_rough,9527,True,0.0,0.0
+dh_resid_diffusion,9527,True,0.0,0.0
