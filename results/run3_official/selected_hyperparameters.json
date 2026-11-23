@@ -1,0 +1,31 @@
+{
+ "criterion": "lowest validation CVaR95 loss (1x fees)",
+ "alpha": {
+  "bootstrap": 0.99,
+  "garch": 0.9,
+  "rough": 0.9,
+  "diffusion": 0.99
+ },
+ "residual": {
+  "bootstrap": {
+   "stand_in": "fwd_noisy",
+   "bound": 0.3,
+   "alpha": 0.9
+  },
+  "garch": {
+   "stand_in": "trailing",
+   "bound": 0.1,
+   "alpha": 0.9
+  },
+  "rough": {
+   "stand_in": "trailing",
+   "bound": 0.1,
+   "alpha": 0.9
+  },
+  "diffusion": {
+   "stand_in": "fwd_noisy",
+   "bound": 0.1,
+   "alpha": 0.99
+  }
+ }
+}

@@ -1,0 +1,17 @@
+{
+ "generator": "diffusion",
+ "stage": "final",
+ "fit_end": "2021-12-31",
+ "train_first_day": "2018-01-02",
+ "train_last_day": "2021-12-31",
+ "n_train_days": 1448,
+ "martingale_shift_per_day": 0.002386861845299949,
+ "fit_and_sample_seconds": 543,
+ "n_params": 1089537,
+ "iters": 8000,
+ "scale_daily_std": 0.039951850886585795,
+ "train_seconds": 3049,
+ "final_loss_avg500": 0.24757330238819122,
+ "sample_steps": 50,
+ "x0_clip_sd": 15.0
+}
