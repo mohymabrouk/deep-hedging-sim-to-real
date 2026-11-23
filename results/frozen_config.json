@@ -1,8 +1,9 @@
 {
- "frozen_at_utc": "2026-11-22T13:51:36+00:00",
+ "frozen_at_utc": "2026-11-23T11:27:44+00:00",
  "rule": "per world, the CVaR level alpha with the lowest CVaR95 loss on the 2021 validation options (1x fees)",
  "rule_residual": "per world, the (sigma_entry stand-in, bound c, alpha) with the lowest CVaR95 loss on the 2021 validation options (1x fees); stage 1: every stand-in x bound at alpha = RESID_STAGE1_ALPHA, stage 2: the stage-1 winner at the other ALPHAS",
- "config_hash": "d35f2054d7c27041",
+ "rule_classical": "ww_band: the risk aversion in WW_RISK_AVERSIONS with the lowest CVaR95 loss on the 2021 validation options (1x fees); mv_delta: Hull-White OLS on 2021 daily Deribit mark-price changes; smile_delta: kept only if its 2021 slope coverage and split-half agreement pass (PLAN.md change 17)",
+ "config_hash": "22c21a25ad4237ee",
  "selected_alpha": {
   "bootstrap": 0.99,
   "garch": 0.9,
@@ -29,6 +30,19 @@
    "stand_in": "fwd_noisy",
    "bound": 0.1,
    "alpha": 0.99
+  }
+ },
+ "selected_classical": {
+  "ww_band": {
+   "risk_aversion": 1000.0
+  },
+  "mv_delta": {
+   "a": -0.1851779954105877,
+   "b": 0.4074059354904006,
+   "c": -0.18458333269325752
+  },
+  "smile_delta": {
+   "kept": true
   }
  },
  "validation_scores": {
@@ -339,6 +353,123 @@
    }
   ]
  },
+ "validation_classical": {
+  "ww_band_grid": [
+   {
+    "risk_aversion": 1.0,
+    "mean_pnl": 0.7194349417764603,
+    "std_loss": 3.244744841443374,
+    "cvar95_loss": 8.211648208258518,
+    "turnover": 0.95619110236634
+   },
+   {
+    "risk_aversion": 3.0,
+    "mean_pnl": 0.6741521129597896,
+    "std_loss": 2.922943121237169,
+    "cvar95_loss": 7.295626503063049,
+    "turnover": 1.0598133666492733
+   },
+   {
+    "risk_aversion": 10.0,
+    "mean_pnl": 0.6271641486088523,
+    "std_loss": 2.74177780178344,
+    "cvar95_loss": 6.920722801100081,
+    "turnover": 1.1627438882417833
+   },
+   {
+    "risk_aversion": 30.0,
+    "mean_pnl": 0.586571274160195,
+    "std_loss": 2.6385317442804195,
+    "cvar95_loss": 6.726944476450514,
+    "turnover": 1.2558370919259694
+   },
+   {
+    "risk_aversion": 100.0,
+    "mean_pnl": 0.5474446740579504,
+    "std_loss": 2.5683516465961826,
+    "cvar95_loss": 6.617827577251617,
+    "turnover": 1.355040649215537
+   },
+   {
+    "risk_aversion": 300.0,
+    "mean_pnl": 0.5199394238930759,
+    "std_loss": 2.5324292960441652,
+    "cvar95_loss": 6.580884375515015,
+    "turnover": 1.4358059790175328
+   },
+   {
+    "risk_aversion": 1000.0,
+    "mean_pnl": 0.49068692856055707,
+    "std_loss": 2.5142599965779824,
+    "cvar95_loss": 6.563647013088117,
+    "turnover": 1.5103476089237884
+   },
+   {
+    "risk_aversion": 3000.0,
+    "mean_pnl": 0.468744009224863,
+    "std_loss": 2.510875924386112,
+    "cvar95_loss": 6.57559685797187,
+    "turnover": 1.5634415624104616
+   }
+  ],
+  "scores": [
+   {
+    "hedger": "bs_iv",
+    "mean_pnl": 0.4129144423627243,
+    "std_loss": 2.516208279758288,
+    "cvar95_loss": 6.631231096239085,
+    "turnover": 1.7068948249654146
+   },
+   {
+    "hedger": "ww_band",
+    "mean_pnl": 0.49068692856055707,
+    "std_loss": 2.5142599965779824,
+    "cvar95_loss": 6.563647013088117,
+    "turnover": 1.5103476089237884
+   },
+   {
+    "hedger": "mv_delta",
+    "mean_pnl": 0.3845770672823773,
+    "std_loss": 2.5139417418444876,
+    "cvar95_loss": 6.913537645664354,
+    "turnover": 1.7242178088735511
+   },
+   {
+    "hedger": "smile_delta",
+    "mean_pnl": 0.43586820348685035,
+    "std_loss": 2.6032990579754904,
+    "cvar95_loss": 6.999842397385042,
+    "turnover": 1.6806515247944513
+   }
+  ],
+  "mv_delta_fit": {
+   "a": -0.1851779954105877,
+   "b": 0.4074059354904006,
+   "c": -0.18458333269325752,
+   "se_a": 0.04260312432661264,
+   "se_b": 0.17602440430056038,
+   "se_c": 0.17002946254845033,
+   "n": 5293,
+   "n_days": 364,
+   "n_calls": 2813,
+   "gain_in_sample": 0.011056203703858958,
+   "first_day": "2021-01-01",
+   "last_day_d": "2021-12-30"
+  },
+  "smile_slope_reliability": {
+   "n_options": 1388,
+   "coverage": 0.9351585014409222,
+   "n_split_pairs": 784,
+   "split_half_pearson": 0.9429579268967959,
+   "split_half_spearman": 0.9501768519759355,
+   "theta_median": -0.1339023041301926,
+   "theta_p05": -1.0122517127472985,
+   "theta_p95": 0.6851837011640005,
+   "share_at_clip": 0.003852080123266564,
+   "rule": "keep if coverage >= 0.5, split-half Pearson >= 0.5 on >= 200 options",
+   "kept": true
+  }
+ },
  "config": {
   "VAL_FIT_END": "2020-12-31",
   "FINAL_FIT_END": "2021-12-31",
@@ -422,6 +553,36 @@
    0.3
   ],
   "RESID_STAGE1_ALPHA": 0.9,
+  "CLASSICAL": [
+   "ww_band",
+   "mv_delta",
+   "smile_delta"
+  ],
+  "WW_RISK_AVERSIONS": [
+   1.0,
+   3.0,
+   10.0,
+   30.0,
+   100.0,
+   300.0,
+   1000.0,
+   3000.0
+  ],
+  "HW_DAYS_TO_EXPIRY": [
+   2,
+   35
+  ],
+  "HW_MAX_ABS_LOG_MONEYNESS": 0.2,
+  "HW_CALL_DELTA_RANGE": [
+   0.05,
+   0.95
+  ],
+  "SMILE_MAX_ABS_M": 0.35,
+  "SMILE_MIN_STRIKES": 4,
+  "SMILE_SLOPE_CLIP": 2.0,
+  "SMILE_KEEP_MIN_COVERAGE": 0.5,
+  "SMILE_KEEP_MIN_SPLIT_CORR": 0.5,
+  "SMILE_KEEP_MIN_PAIRS": 200,
   "HEDGERS": [
    "no_hedge",
    "bs_iv",
@@ -433,7 +594,10 @@
    "dh_resid_bootstrap",
    "dh_resid_garch",
    "dh_resid_rough",
-   "dh_resid_diffusion"
+   "dh_resid_diffusion",
+   "ww_band",
+   "mv_delta",
+   "smile_delta"
   ],
   "selected_alpha": {
    "bootstrap": 0.99,
@@ -461,6 +625,19 @@
     "stand_in": "fwd_noisy",
     "bound": 0.1,
     "alpha": 0.99
+   }
+  },
+  "selected_classical": {
+   "ww_band": {
+    "risk_aversion": 1000.0
+   },
+   "mv_delta": {
+    "a": -0.1851779954105877,
+    "b": 0.4074059354904006,
+    "c": -0.18458333269325752
+   },
+   "smile_delta": {
+    "kept": true
    }
   }
  }
